@@ -1,0 +1,986 @@
+<title>Recovery Doses</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,600&family=Albert+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap">
+<style>
+  :root {
+    --bg: #F2F5F4;
+    --surface: #FFFFFF;
+    --ink: #1E2B28;
+    --muted: #5E6F6A;
+    --line: #DCE4E1;
+    --accent: #2E7D68;
+    --accent-ink: #FFFFFF;
+    --accent-soft: #E3EFEB;
+    --wait: #A66A14;
+    --wait-soft: #F6EBD8;
+    --over: #B0432E;
+    --over-soft: #F6E3DE;
+    --meter-track: #E5EBE9;
+    --shadow: 0 1px 3px rgba(30, 43, 40, 0.08);
+    --display: "Bricolage Grotesque", "Avenir Next", "Helvetica Neue", sans-serif;
+    --body: "Albert Sans", -apple-system, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #121917;
+      --surface: #1B2422;
+      --ink: #E5ECE9;
+      --muted: #93A39D;
+      --line: #2A3532;
+      --accent: #55B79D;
+      --accent-ink: #0E1614;
+      --accent-soft: #223832;
+      --wait: #D9A050;
+      --wait-soft: #33291A;
+      --over: #E07A5F;
+      --over-soft: #38211C;
+      --meter-track: #263130;
+      --shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #121917;
+    --surface: #1B2422;
+    --ink: #E5ECE9;
+    --muted: #93A39D;
+    --line: #2A3532;
+    --accent: #55B79D;
+    --accent-ink: #0E1614;
+    --accent-soft: #223832;
+    --wait: #D9A050;
+    --wait-soft: #33291A;
+    --over: #E07A5F;
+    --over-soft: #38211C;
+    --meter-track: #263130;
+    --shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--body);
+    font-size: 16px;
+    line-height: 1.45;
+    padding-inline: 16px;
+    padding-block: 0;
+    -webkit-text-size-adjust: 100%;
+  }
+  .app {
+    max-width: 560px;
+    margin-inline: auto;
+    padding-block: 28px 56px;
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+  }
+
+  header h1 {
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: 27px;
+    margin: 0;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+  }
+  header .sub {
+    margin: 4px 0 0;
+    color: var(--muted);
+    font-size: 14px;
+  }
+
+  #cards { display: flex; flex-direction: column; gap: 14px; }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    box-shadow: var(--shadow);
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .card-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .kind {
+    margin: 0;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .card h3 {
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: 22px;
+    margin: 1px 0 0;
+    letter-spacing: -0.01em;
+  }
+  .chip {
+    flex: none;
+    font-size: 13px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--accent);
+    background: var(--accent-soft);
+    padding: 3px 10px;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+
+  .status { margin: 0; font-size: 15px; }
+  .status .dot {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    margin-right: 6px;
+    vertical-align: 1px;
+    background: var(--muted);
+  }
+  .status.ready .dot { background: var(--accent); }
+  .status.wait .dot { background: var(--wait); }
+  .status.wait strong { color: var(--wait); }
+  .status.ready strong { color: var(--accent); }
+  .status strong { font-variant-numeric: tabular-nums; }
+
+  .meter {
+    height: 6px;
+    border-radius: 3px;
+    background: var(--meter-track);
+    overflow: hidden;
+  }
+  .meter-fill {
+    height: 100%;
+    border-radius: 3px;
+    background: var(--accent);
+    transition: width 0.3s ease;
+  }
+  .meter-fill.over { background: var(--over); }
+  .meter-label {
+    margin: -6px 0 0;
+    font-size: 13px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .limit-warn {
+    margin: -4px 0 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--over);
+  }
+
+  .actions { display: flex; gap: 10px; }
+  button {
+    font-family: var(--body);
+    font-size: 16px;
+    border: none;
+    border-radius: 12px;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .log {
+    flex: 1;
+    min-height: 50px;
+    font-size: 17px;
+    font-weight: 600;
+    background: var(--accent);
+    color: var(--accent-ink);
+  }
+  .log:active { filter: brightness(0.92); }
+  .ghost {
+    flex: none;
+    min-height: 50px;
+    padding-inline: 14px;
+    font-weight: 500;
+    background: transparent;
+    border: 1px solid var(--line);
+    color: var(--muted);
+  }
+  .ghost:active { background: var(--accent-soft); }
+
+  .confirm {
+    background: var(--wait-soft);
+    border-radius: 12px;
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .confirm.over { background: var(--over-soft); }
+  .confirm p { margin: 0; font-size: 14px; }
+  .confirm .confirm-row { display: flex; gap: 10px; }
+  .confirm .yes {
+    flex: 1;
+    min-height: 44px;
+    font-weight: 600;
+    background: var(--wait);
+    color: #FFFFFF;
+  }
+  .confirm.over .yes { background: var(--over); }
+  .confirm .no {
+    flex: 1;
+    min-height: 44px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    color: var(--ink);
+  }
+
+  .backdate {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    background: var(--accent-soft);
+    border-radius: 12px;
+    padding: 12px 14px;
+  }
+  .backdate label { font-size: 13px; font-weight: 600; color: var(--muted); }
+  input[type="datetime-local"], input[type="number"] {
+    font-family: var(--body);
+    font-size: 16px;
+    font-variant-numeric: tabular-nums;
+    color: var(--ink);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 10px 12px;
+    width: 100%;
+  }
+  input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .backdate .confirm-row { display: flex; gap: 10px; }
+  .backdate .yes {
+    flex: 1; min-height: 44px; font-weight: 600;
+    background: var(--accent); color: var(--accent-ink);
+  }
+  .backdate .no {
+    flex: 1; min-height: 44px;
+    background: var(--surface); border: 1px solid var(--line); color: var(--ink);
+  }
+
+  h2 {
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: 19px;
+    margin: 0 0 10px;
+    letter-spacing: -0.01em;
+  }
+  .day { margin-bottom: 18px; }
+  .day-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 6px;
+    margin-bottom: 4px;
+  }
+  .day-head h4 { margin: 0; font-size: 14px; font-weight: 700; flex: none; white-space: nowrap; }
+  .day-head .day-totals {
+    font-size: 12px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+  }
+  .entry {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding-block: 9px;
+    border-bottom: 1px solid var(--line);
+  }
+  .entry:last-child { border-bottom: none; }
+  .e-time {
+    flex: none;
+    min-width: 52px;
+    white-space: nowrap;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    font-size: 15px;
+  }
+  .e-med { flex: 1; font-size: 15px; }
+  .e-med b { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .e-actions { flex: none; display: flex; gap: 6px; }
+  .e-actions button {
+    font-size: 13px;
+    padding: 7px 10px;
+    min-height: 34px;
+    background: transparent;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    color: var(--muted);
+  }
+  .e-actions button.danger-armed {
+    background: var(--over);
+    border-color: var(--over);
+    color: #FFFFFF;
+    font-weight: 600;
+  }
+  .entry-edit {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-block: 9px;
+    border-bottom: 1px solid var(--line);
+  }
+  .entry-edit .confirm-row { display: flex; gap: 8px; }
+  .entry-edit .yes {
+    flex: 1; min-height: 42px; font-weight: 600;
+    background: var(--accent); color: var(--accent-ink);
+  }
+  .entry-edit .no {
+    flex: 1; min-height: 42px;
+    background: var(--surface); border: 1px solid var(--line); color: var(--ink);
+  }
+  .empty { color: var(--muted); font-size: 14px; margin: 0; }
+
+  details {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    box-shadow: var(--shadow);
+  }
+  summary {
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: 17px;
+    padding: 14px 16px;
+    cursor: pointer;
+    list-style: none;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  summary::-webkit-details-marker { display: none; }
+  summary::after { content: "+"; color: var(--muted); font-size: 20px; font-weight: 400; }
+  details[open] summary::after { content: "–"; }
+  .settings-body {
+    padding: 2px 16px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+  .set-med h4 {
+    margin: 0 0 8px;
+    font-size: 14px;
+    font-weight: 700;
+  }
+  .set-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+  }
+  .set-grid label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  @media (max-width: 420px) {
+    .set-grid { grid-template-columns: 1fr 1fr; }
+  }
+  .settings-actions { display: flex; flex-direction: column; gap: 10px; }
+  .primary-wide {
+    min-height: 48px;
+    font-weight: 600;
+    background: var(--accent);
+    color: var(--accent-ink);
+  }
+  .secondary-wide {
+    min-height: 48px;
+    background: transparent;
+    border: 1px solid var(--line);
+    color: var(--ink);
+  }
+  .danger-wide {
+    min-height: 48px;
+    background: transparent;
+    border: 1px solid var(--over);
+    color: var(--over);
+  }
+  .danger-wide.danger-armed { background: var(--over); color: #FFFFFF; font-weight: 600; }
+
+  .foot {
+    margin: 0;
+    font-size: 12.5px;
+    line-height: 1.55;
+    color: var(--muted);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
+</style>
+
+<div class="app">
+  <header>
+    <h1>Recovery Doses</h1>
+    <p class="sub">Post-surgery medication log &middot; stored only on this device</p>
+  </header>
+
+  <section id="cards" aria-label="Medications"></section>
+
+  <section aria-label="Dose log">
+    <h2>Log</h2>
+    <div id="history"></div>
+  </section>
+
+  <details id="settings">
+    <summary>Doses, limits &amp; data</summary>
+    <div class="settings-body">
+      <div id="set-meds"></div>
+      <div class="settings-actions">
+        <button id="save-settings" class="primary-wide" type="button">Save settings</button>
+        <button id="copy-log" class="secondary-wide" type="button">Copy full log as text</button>
+        <button id="erase" class="danger-wide" type="button">Erase all data</button>
+      </div>
+    </div>
+  </details>
+
+  <p class="foot">
+    The pre-filled doses, minimum gaps and 24-hour limits are typical adult figures —
+    set them to match your prescription and follow your surgeon's or pharmacist's
+    directions, not this page. The paracetamol total must include any combination
+    products (e.g. co-codamol, cold &amp; flu remedies). This log is a memory aid,
+    not medical advice.
+  </p>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var STORE_KEY = "recovery-doses.v1";
+  var HOUR = 3600 * 1000;
+  var DAY = 24 * HOUR;
+
+  var MED_ORDER = ["tramadol", "celecoxib", "paracetamol"];
+  var DEFAULT_MEDS = {
+    tramadol:    { name: "Tramadol",    kind: "Opioid analgesic",            dose: 50,   minH: 4,  max24: 400 },
+    celecoxib:   { name: "Celecoxib",   kind: "NSAID · anti-inflammatory", dose: 200,  minH: 12, max24: 400 },
+    paracetamol: { name: "Paracetamol", kind: "Analgesic · antipyretic",   dose: 1000, minH: 4,  max24: 4000 }
+  };
+
+  var state = load();
+  // Transient UI state (not persisted)
+  var ui = { confirm: null, confirmTime: null, backdate: null, editingId: null };
+
+  function load() {
+    var s = null;
+    try { s = JSON.parse(localStorage.getItem(STORE_KEY)); } catch (e) {}
+    if (!s || !s.meds || !s.entries) {
+      s = { meds: JSON.parse(JSON.stringify(DEFAULT_MEDS)), entries: [] };
+    }
+    MED_ORDER.forEach(function (k) {
+      if (!s.meds[k]) s.meds[k] = JSON.parse(JSON.stringify(DEFAULT_MEDS[k]));
+    });
+    return s;
+  }
+  function save() {
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (e) {}
+  }
+
+  /* ---------- formatting helpers ---------- */
+  function fmtTime(t) {
+    return new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+  function fmtDay(t) {
+    return new Date(t).toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" });
+  }
+  function fmtDur(ms) {
+    if (ms < 0) ms = 0;
+    var mins = Math.round(ms / 60000);
+    var h = Math.floor(mins / 60), m = mins % 60;
+    if (h === 0) return m + " min";
+    if (m === 0) return h + " h";
+    return h + " h " + m + " min";
+  }
+  function fmtMg(mg) {
+    return mg >= 1000 && mg % 100 === 0 ? (mg / 1000).toLocaleString(undefined, { maximumFractionDigits: 1 }) + " g" : mg + " mg";
+  }
+  function toLocalInput(t) {
+    var d = new Date(t);
+    function p(n) { return (n < 10 ? "0" : "") + n; }
+    return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) +
+           "T" + p(d.getHours()) + ":" + p(d.getMinutes());
+  }
+
+  /* ---------- data queries ---------- */
+  function entriesFor(med) {
+    return state.entries.filter(function (e) { return e.med === med; });
+  }
+  function lastDose(med) {
+    var es = entriesFor(med);
+    if (!es.length) return null;
+    return es.reduce(function (a, b) { return a.t > b.t ? a : b; });
+  }
+  function total24(med, now) {
+    return entriesFor(med).reduce(function (sum, e) {
+      return (now - e.t < DAY && e.t <= now) ? sum + e.mg : sum;
+    }, 0);
+  }
+
+  /* ---------- logging ---------- */
+  function reasonsFor(med, t, mg) {
+    var m = state.meds[med];
+    var reasons = [];
+    var last = lastDose(med);
+    if (last && t > last.t && (t - last.t) < m.minH * HOUR) {
+      reasons.push({
+        kind: "early",
+        text: "Only " + fmtDur(t - last.t) + " since your last " + m.name.toLowerCase() +
+              " dose — your set minimum gap is " + m.minH + " h."
+      });
+    }
+    var newTotal = total24(med, t) + mg;
+    if (newTotal > m.max24) {
+      reasons.push({
+        kind: "over",
+        text: "This dose takes the last 24 h to " + fmtMg(newTotal) +
+              ", above your " + fmtMg(m.max24) + " limit."
+      });
+    }
+    return reasons;
+  }
+
+  function addEntry(med, t, mg) {
+    state.entries.push({ id: Date.now() + "-" + Math.random().toString(36).slice(2, 7), med: med, t: t, mg: mg });
+    state.entries.sort(function (a, b) { return b.t - a.t; });
+    save();
+  }
+
+  function tryLog(med, t) {
+    var m = state.meds[med];
+    var reasons = reasonsFor(med, t, m.dose);
+    if (reasons.length) {
+      ui.confirm = med;
+      ui.confirmTime = t;
+      ui.backdate = null;
+      renderCards();
+      return;
+    }
+    commitLog(med, t);
+  }
+  function commitLog(med, t) {
+    addEntry(med, t, state.meds[med].dose);
+    ui.confirm = null; ui.confirmTime = null; ui.backdate = null;
+    renderCards(); renderHistory();
+  }
+
+  /* ---------- med cards ---------- */
+  function renderCards() {
+    var now = Date.now();
+    var root = document.getElementById("cards");
+    root.textContent = "";
+
+    MED_ORDER.forEach(function (key) {
+      var m = state.meds[key];
+      var card = document.createElement("article");
+      card.className = "card";
+
+      var head = document.createElement("div");
+      head.className = "card-head";
+      var titleWrap = document.createElement("div");
+      var kind = document.createElement("p");
+      kind.className = "kind"; kind.textContent = m.kind;
+      var h3 = document.createElement("h3"); h3.textContent = m.name;
+      titleWrap.appendChild(kind); titleWrap.appendChild(h3);
+      var chip = document.createElement("span");
+      chip.className = "chip"; chip.textContent = fmtMg(m.dose) + " / dose";
+      head.appendChild(titleWrap); head.appendChild(chip);
+      card.appendChild(head);
+
+      var status = document.createElement("p");
+      status.className = "status";
+      var dot = document.createElement("span"); dot.className = "dot";
+      status.appendChild(dot);
+      var last = lastDose(key);
+      if (!last) {
+        status.classList.add("ready");
+        status.appendChild(document.createTextNode("No doses logged yet."));
+      } else {
+        var nextOk = last.t + m.minH * HOUR;
+        if (now >= nextOk) {
+          status.classList.add("ready");
+          var s1 = document.createElement("strong"); s1.textContent = "Ready";
+          status.appendChild(s1);
+          status.appendChild(document.createTextNode(
+            " — last dose " + fmtDur(now - last.t) + " ago (" + fmtTime(last.t) + ")."));
+        } else {
+          status.classList.add("wait");
+          var s2 = document.createElement("strong");
+          s2.textContent = "Next from " + fmtTime(nextOk);
+          status.appendChild(s2);
+          status.appendChild(document.createTextNode(
+            " — " + fmtDur(nextOk - now) + " to go. Last at " + fmtTime(last.t) + "."));
+        }
+      }
+      card.appendChild(status);
+
+      var tot = total24(key, now);
+      var meter = document.createElement("div");
+      meter.className = "meter";
+      var fill = document.createElement("div");
+      fill.className = "meter-fill" + (tot > m.max24 ? " over" : "");
+      fill.style.width = Math.min(100, (tot / m.max24) * 100) + "%";
+      meter.appendChild(fill);
+      card.appendChild(meter);
+      var mlabel = document.createElement("p");
+      mlabel.className = "meter-label";
+      mlabel.textContent = fmtMg(tot) + " of " + fmtMg(m.max24) + " in the last 24 h";
+      card.appendChild(mlabel);
+      if (tot + m.dose > m.max24) {
+        var lw = document.createElement("p");
+        lw.className = "limit-warn";
+        lw.textContent = tot >= m.max24
+          ? "24-h limit reached."
+          : "Another " + fmtMg(m.dose) + " would exceed the 24-h limit.";
+        card.appendChild(lw);
+      }
+
+      if (ui.confirm === key) {
+        card.appendChild(buildConfirm(key));
+      } else if (ui.backdate === key) {
+        card.appendChild(buildBackdate(key));
+      } else {
+        var actions = document.createElement("div");
+        actions.className = "actions";
+        var logBtn = document.createElement("button");
+        logBtn.type = "button";
+        logBtn.className = "log";
+        logBtn.textContent = "Log " + fmtMg(m.dose) + " now";
+        logBtn.addEventListener("click", function () { tryLog(key, Date.now()); });
+        var earlier = document.createElement("button");
+        earlier.type = "button";
+        earlier.className = "ghost";
+        earlier.textContent = "Earlier…";
+        earlier.setAttribute("aria-label", "Log a " + m.name + " dose taken at an earlier time");
+        earlier.addEventListener("click", function () {
+          ui.backdate = key; ui.confirm = null;
+          renderCards();
+        });
+        actions.appendChild(logBtn); actions.appendChild(earlier);
+        card.appendChild(actions);
+      }
+
+      root.appendChild(card);
+    });
+  }
+
+  function buildConfirm(key) {
+    var m = state.meds[key];
+    var t = ui.confirmTime || Date.now();
+    var reasons = reasonsFor(key, t, m.dose);
+    var box = document.createElement("div");
+    box.className = "confirm" + (reasons.some(function (r) { return r.kind === "over"; }) ? " over" : "");
+    reasons.forEach(function (r) {
+      var p = document.createElement("p");
+      p.textContent = r.text;
+      box.appendChild(p);
+    });
+    var row = document.createElement("div");
+    row.className = "confirm-row";
+    var yes = document.createElement("button");
+    yes.type = "button"; yes.className = "yes"; yes.textContent = "Log anyway";
+    yes.addEventListener("click", function () { commitLog(key, t); });
+    var no = document.createElement("button");
+    no.type = "button"; no.className = "no"; no.textContent = "Cancel";
+    no.addEventListener("click", function () {
+      ui.confirm = null; ui.confirmTime = null;
+      renderCards();
+    });
+    row.appendChild(no); row.appendChild(yes);
+    box.appendChild(row);
+    return box;
+  }
+
+  function buildBackdate(key) {
+    var m = state.meds[key];
+    var box = document.createElement("div");
+    box.className = "backdate";
+    var label = document.createElement("label");
+    label.textContent = "When did you take the " + fmtMg(m.dose) + "?";
+    label.setAttribute("for", "backdate-" + key);
+    var input = document.createElement("input");
+    input.type = "datetime-local";
+    input.id = "backdate-" + key;
+    input.value = toLocalInput(Date.now());
+    input.max = toLocalInput(Date.now());
+    var row = document.createElement("div");
+    row.className = "confirm-row";
+    var yes = document.createElement("button");
+    yes.type = "button"; yes.className = "yes"; yes.textContent = "Add dose";
+    yes.addEventListener("click", function () {
+      var t = new Date(input.value).getTime();
+      if (!isFinite(t)) return;
+      if (t > Date.now()) t = Date.now();
+      tryLog(key, t);
+      renderHistory();
+    });
+    var no = document.createElement("button");
+    no.type = "button"; no.className = "no"; no.textContent = "Cancel";
+    no.addEventListener("click", function () { ui.backdate = null; renderCards(); });
+    row.appendChild(no); row.appendChild(yes);
+    box.appendChild(label); box.appendChild(input); box.appendChild(row);
+    return box;
+  }
+
+  /* ---------- history ---------- */
+  function renderHistory() {
+    var root = document.getElementById("history");
+    root.textContent = "";
+    if (!state.entries.length) {
+      var p = document.createElement("p");
+      p.className = "empty";
+      p.textContent = "Doses you log will appear here, grouped by day.";
+      root.appendChild(p);
+      return;
+    }
+    var sorted = state.entries.slice().sort(function (a, b) { return b.t - a.t; });
+    var groups = [];
+    sorted.forEach(function (e) {
+      var dayKey = new Date(e.t).toDateString();
+      var g = groups[groups.length - 1];
+      if (!g || g.key !== dayKey) {
+        g = { key: dayKey, t: e.t, entries: [] };
+        groups.push(g);
+      }
+      g.entries.push(e);
+    });
+
+    groups.forEach(function (g) {
+      var day = document.createElement("div");
+      day.className = "day";
+      var head = document.createElement("div");
+      head.className = "day-head";
+      var h4 = document.createElement("h4");
+      h4.textContent = fmtDay(g.t);
+      var totals = {};
+      g.entries.forEach(function (e) { totals[e.med] = (totals[e.med] || 0) + e.mg; });
+      var tspan = document.createElement("span");
+      tspan.className = "day-totals";
+      tspan.textContent = MED_ORDER.filter(function (k) { return totals[k]; })
+        .map(function (k) { return state.meds[k].name + " " + fmtMg(totals[k]); })
+        .join(" · ");
+      head.appendChild(h4); head.appendChild(tspan);
+      day.appendChild(head);
+
+      g.entries.forEach(function (e) {
+        day.appendChild(ui.editingId === e.id ? buildEntryEditor(e) : buildEntryRow(e));
+      });
+      root.appendChild(day);
+    });
+  }
+
+  function buildEntryRow(e) {
+    var row = document.createElement("div");
+    row.className = "entry";
+    var time = document.createElement("span");
+    time.className = "e-time"; time.textContent = fmtTime(e.t);
+    var med = document.createElement("span");
+    med.className = "e-med";
+    med.appendChild(document.createTextNode(state.meds[e.med].name + " "));
+    var b = document.createElement("b"); b.textContent = fmtMg(e.mg);
+    med.appendChild(b);
+    var actions = document.createElement("span");
+    actions.className = "e-actions";
+    var edit = document.createElement("button");
+    edit.type = "button"; edit.textContent = "Edit";
+    edit.setAttribute("aria-label", "Edit time of this dose");
+    edit.addEventListener("click", function () {
+      ui.editingId = e.id;
+      renderHistory();
+    });
+    var del = document.createElement("button");
+    del.type = "button"; del.textContent = "Delete";
+    del.setAttribute("aria-label", "Delete this dose");
+    del.addEventListener("click", function () {
+      if (del.classList.contains("danger-armed")) {
+        state.entries = state.entries.filter(function (x) { return x.id !== e.id; });
+        save(); renderCards(); renderHistory();
+      } else {
+        del.classList.add("danger-armed");
+        del.textContent = "Sure?";
+        setTimeout(function () {
+          del.classList.remove("danger-armed");
+          del.textContent = "Delete";
+        }, 3000);
+      }
+    });
+    actions.appendChild(edit); actions.appendChild(del);
+    row.appendChild(time); row.appendChild(med); row.appendChild(actions);
+    return row;
+  }
+
+  function buildEntryEditor(e) {
+    var wrap = document.createElement("div");
+    wrap.className = "entry-edit";
+    var input = document.createElement("input");
+    input.type = "datetime-local";
+    input.id = "edit-" + e.id;
+    input.value = toLocalInput(e.t);
+    input.max = toLocalInput(Date.now());
+    var row = document.createElement("div");
+    row.className = "confirm-row";
+    var yes = document.createElement("button");
+    yes.type = "button"; yes.className = "yes"; yes.textContent = "Save time";
+    yes.addEventListener("click", function () {
+      var t = new Date(input.value).getTime();
+      if (isFinite(t)) {
+        e.t = Math.min(t, Date.now());
+        state.entries.sort(function (a, b) { return b.t - a.t; });
+        save();
+      }
+      ui.editingId = null;
+      renderCards(); renderHistory();
+    });
+    var no = document.createElement("button");
+    no.type = "button"; no.className = "no"; no.textContent = "Cancel";
+    no.addEventListener("click", function () { ui.editingId = null; renderHistory(); });
+    row.appendChild(no); row.appendChild(yes);
+    wrap.appendChild(input); wrap.appendChild(row);
+    return wrap;
+  }
+
+  /* ---------- settings ---------- */
+  function renderSettingsForm() {
+    var root = document.getElementById("set-meds");
+    root.textContent = "";
+    MED_ORDER.forEach(function (key) {
+      var m = state.meds[key];
+      var box = document.createElement("div");
+      box.className = "set-med";
+      var h4 = document.createElement("h4"); h4.textContent = m.name;
+      box.appendChild(h4);
+      var grid = document.createElement("div");
+      grid.className = "set-grid";
+      grid.appendChild(makeField("set-" + key + "-dose", "mg per dose", m.dose, 1));
+      grid.appendChild(makeField("set-" + key + "-min", "min hours", m.minH, 0.5));
+      grid.appendChild(makeField("set-" + key + "-max", "max mg / 24 h", m.max24, 1));
+      box.appendChild(grid);
+      root.appendChild(box);
+    });
+  }
+  function makeField(id, labelText, value, step) {
+    var label = document.createElement("label");
+    label.setAttribute("for", id);
+    label.appendChild(document.createTextNode(labelText));
+    var input = document.createElement("input");
+    input.type = "number"; input.id = id; input.value = value;
+    input.min = String(step); input.step = String(step);
+    input.inputMode = "decimal";
+    label.appendChild(input);
+    return label;
+  }
+  function saveSettings() {
+    MED_ORDER.forEach(function (key) {
+      var m = state.meds[key];
+      var dose = parseFloat(document.getElementById("set-" + key + "-dose").value);
+      var minH = parseFloat(document.getElementById("set-" + key + "-min").value);
+      var max24 = parseFloat(document.getElementById("set-" + key + "-max").value);
+      if (isFinite(dose) && dose > 0) m.dose = dose;
+      if (isFinite(minH) && minH > 0) m.minH = minH;
+      if (isFinite(max24) && max24 > 0) m.max24 = max24;
+    });
+    save();
+    renderSettingsForm();
+    renderCards();
+    flashButton("save-settings", "Saved ✓", "Save settings");
+  }
+  function flashButton(id, tempText, backText) {
+    var btn = document.getElementById(id);
+    btn.textContent = tempText;
+    setTimeout(function () { btn.textContent = backText; }, 2000);
+  }
+
+  /* ---------- export ---------- */
+  function buildExport() {
+    var now = Date.now();
+    var lines = [];
+    lines.push("Medication log — exported " + fmtDay(now) + ", " + fmtTime(now));
+    lines.push("");
+    MED_ORDER.forEach(function (k) {
+      var m = state.meds[k];
+      lines.push(m.name + ": " + fmtMg(m.dose) + " per dose · min gap " + m.minH +
+                 " h · last 24 h: " + fmtMg(total24(k, now)) + " of " + fmtMg(m.max24));
+    });
+    lines.push("");
+    var sorted = state.entries.slice().sort(function (a, b) { return a.t - b.t; });
+    var currentDay = "";
+    sorted.forEach(function (e) {
+      var dk = new Date(e.t).toDateString();
+      if (dk !== currentDay) {
+        currentDay = dk;
+        lines.push(fmtDay(e.t));
+      }
+      lines.push("  " + fmtTime(e.t) + "  " + state.meds[e.med].name + " " + fmtMg(e.mg));
+    });
+    if (!sorted.length) lines.push("(no doses logged)");
+    return lines.join("\n");
+  }
+  function copyLog() {
+    var text = buildExport();
+    function done() { flashButton("copy-log", "Copied ✓", "Copy full log as text"); }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, function () { fallbackCopy(text, done); });
+    } else {
+      fallbackCopy(text, done);
+    }
+  }
+  function fallbackCopy(text, done) {
+    var ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.focus(); ta.select();
+    try { document.execCommand("copy"); done(); } catch (e) {}
+    document.body.removeChild(ta);
+  }
+
+  function eraseAll() {
+    var btn = document.getElementById("erase");
+    if (btn.classList.contains("danger-armed")) {
+      state = { meds: JSON.parse(JSON.stringify(DEFAULT_MEDS)), entries: [] };
+      try { localStorage.removeItem(STORE_KEY); } catch (e) {}
+      btn.classList.remove("danger-armed");
+      btn.textContent = "Erase all data";
+      ui.confirm = null; ui.backdate = null; ui.editingId = null;
+      renderSettingsForm(); renderCards(); renderHistory();
+    } else {
+      btn.classList.add("danger-armed");
+      btn.textContent = "Tap again to erase everything";
+      setTimeout(function () {
+        btn.classList.remove("danger-armed");
+        btn.textContent = "Erase all data";
+      }, 4000);
+    }
+  }
+
+  /* ---------- boot ---------- */
+  document.getElementById("save-settings").addEventListener("click", saveSettings);
+  document.getElementById("copy-log").addEventListener("click", copyLog);
+  document.getElementById("erase").addEventListener("click", eraseAll);
+
+  renderSettingsForm();
+  renderCards();
+  renderHistory();
+
+  // Keep countdowns fresh; skip while an inline editor or picker is open.
+  setInterval(function () {
+    if (ui.confirm === null && ui.backdate === null && ui.editingId === null) renderCards();
+  }, 30000);
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden && ui.confirm === null && ui.backdate === null && ui.editingId === null) {
+      renderCards();
+    }
+  });
+})();
+</script>
