@@ -88,6 +88,36 @@
     font-size: 14px;
   }
 
+  #next-up { display: flex; flex-direction: column; gap: 4px; }
+  .nextup-eyebrow {
+    margin: 0;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .nextup-time {
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: 46px;
+    line-height: 1.05;
+    letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+    margin: 2px 0 0;
+  }
+  .nextup-time.now { color: var(--accent); }
+  .nextup-med { margin: 4px 0 0; font-size: 15px; font-weight: 500; }
+  .nextup-hint { margin: 6px 0 0; font-size: 13px; color: var(--muted); }
+  .nextup-others {
+    margin: 10px 0 0;
+    padding-top: 10px;
+    border-top: 1px solid var(--line);
+    font-size: 13px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+
   #cards { display: flex; flex-direction: column; gap: 14px; }
 
   .card {
@@ -441,6 +471,8 @@
     <p class="sub">Post-surgery medication log &middot; <span id="sync-note">stored in this browser</span></p>
   </header>
 
+  <section id="next-up" aria-live="polite"></section>
+
   <section id="cards" aria-label="Medications"></section>
 
   <section aria-label="Dose log">
@@ -595,8 +627,114 @@
     renderCards(); renderHistory();
   }
 
+  /* ---------- next dose due ---------- */
+  var QUIET_FROM = 22, QUIET_TO = 7;
+
+  // A dose that unlocks overnight is no use as an alarm — push it to 7 am.
+  function quietShift(t) {
+    var d = new Date(t);
+    var h = d.getHours();
+    if (h >= QUIET_FROM) {
+      d.setDate(d.getDate() + 1);
+      d.setHours(QUIET_TO, 0, 0, 0);
+      return d.getTime();
+    }
+    if (h < QUIET_TO) {
+      d.setHours(QUIET_TO, 0, 0, 0);
+      return d.getTime();
+    }
+    return t;
+  }
+
+  // Earliest moment from `now` that the rolling 24-h total leaves room
+  // for another dose. Null when no dose fits inside the cap at all.
+  function capClearTime(key, now) {
+    var m = state.meds[key];
+    var times = entriesFor(key).map(function (e) { return e.t + DAY; });
+    times.push(now);
+    times.sort(function (a, b) { return a - b; });
+    for (var i = 0; i < times.length; i++) {
+      if (times[i] >= now && total24(key, times[i]) + m.dose <= m.max24) return times[i];
+    }
+    return null;
+  }
+
+  function nextDoses(now) {
+    var out = [];
+    MED_ORDER.forEach(function (key) {
+      var m = state.meds[key];
+      if (m.remind === false) return;
+      var last = lastDose(key);
+      if (!last) return;
+      var cap = capClearTime(key, now);
+      if (cap === null) return;
+      var due = Math.max(last.t + m.minH * HOUR, cap);
+      var at = quietShift(due);
+      out.push({ key: key, name: m.name, dose: m.dose, raw: due, at: at, held: at > due });
+    });
+    out.sort(function (a, b) { return a.at - b.at; });
+    return out;
+  }
+
+  function renderNextUp() {
+    var root = document.getElementById("next-up");
+    root.textContent = "";
+    var now = Date.now();
+    var list = nextDoses(now);
+    if (!list.length) return;
+
+    var dueNow = list.filter(function (d) { return d.at <= now; });
+    var eyebrow = document.createElement("p");
+    eyebrow.className = "nextup-eyebrow";
+    var time = document.createElement("p");
+    time.className = "nextup-time";
+    var med = document.createElement("p");
+    med.className = "nextup-med";
+    var hint = document.createElement("p");
+    hint.className = "nextup-hint";
+
+    if (dueNow.length) {
+      eyebrow.textContent = "Ready to take";
+      time.textContent = "Now";
+      time.classList.add("now");
+      med.textContent = dueNow.map(function (d) {
+        return d.name + " " + fmtMg(d.dose);
+      }).join(" · ");
+      var after = list.filter(function (d) { return d.at > now; })[0];
+      hint.textContent = after
+        ? "After that: " + after.name + " from " + fmtTime(after.at) + "."
+        : "Log each dose as you take it to keep the timings right.";
+    } else {
+      var next = list[0];
+      eyebrow.textContent = "Next dose";
+      time.textContent = fmtTime(next.at);
+      med.textContent = next.name + " " + fmtMg(next.dose) + " — in " + fmtDur(next.at - now);
+      hint.textContent = next.held
+        ? "It unlocks overnight at " + fmtTime(next.raw) +
+          ", held to 7 am so no alarm wakes you. Set a phone alarm for " + fmtTime(next.at) + "."
+        : "Set a phone alarm for " + fmtTime(next.at) + ".";
+    }
+
+    root.appendChild(eyebrow);
+    root.appendChild(time);
+    root.appendChild(med);
+    root.appendChild(hint);
+
+    // The first upcoming dose is already named above, in the headline or the hint.
+    var others = list.filter(function (d) { return d.at > now; }).slice(1);
+    if (others.length) {
+      var row = document.createElement("p");
+      row.className = "nextup-others";
+      row.textContent = "Then " + others.map(function (d) {
+        return d.name + " " + fmtTime(d.at) + (d.held ? " (held overnight)" : "");
+      }).join(" · ");
+      root.appendChild(row);
+    }
+  }
+
   /* ---------- med cards ---------- */
   function renderCards() {
+    renderNextUp();
     var now = Date.now();
     var root = document.getElementById("cards");
     root.textContent = "";
