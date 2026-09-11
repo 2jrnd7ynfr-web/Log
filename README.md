@@ -8,7 +8,9 @@ paracetamol doses during surgery recovery.
 - Rolling 24-hour totals against a configurable per-medication limit,
   with soft warnings (logging is never blocked — the record reflects reality)
 - Day-grouped history with edit/delete, plain-text export for a care team
-- All data stays in the browser's localStorage; nothing is sent anywhere
+- Doses and settings persist in the published artifact's private database
+  (`entries` collection + `config/meds` doc), with localStorage as an
+  instant-load cache and offline fallback
 
 Everything lives in `index.html` — no build step, no dependencies beyond
 Google Fonts.

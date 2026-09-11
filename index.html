@@ -423,7 +423,7 @@
 <div class="app">
   <header>
     <h1>Recovery Doses</h1>
-    <p class="sub">Post-surgery medication log &middot; stored only on this device</p>
+    <p class="sub">Post-surgery medication log &middot; <span id="sync-note">stored in this browser</span></p>
   </header>
 
   <section id="cards" aria-label="Medications"></section>
@@ -552,9 +552,11 @@
   }
 
   function addEntry(med, t, mg) {
-    state.entries.push({ id: Date.now() + "-" + Math.random().toString(36).slice(2, 7), med: med, t: t, mg: mg });
+    var entry = { id: Date.now() + "-" + Math.random().toString(36).slice(2, 7), med: med, t: t, mg: mg };
+    state.entries.push(entry);
     state.entries.sort(function (a, b) { return b.t - a.t; });
     save();
+    dbAdd(entry);
   }
 
   function tryLog(med, t) {
@@ -805,7 +807,7 @@
     del.addEventListener("click", function () {
       if (del.classList.contains("danger-armed")) {
         state.entries = state.entries.filter(function (x) { return x.id !== e.id; });
-        save(); renderCards(); renderHistory();
+        save(); dbDelete(e.id); renderCards(); renderHistory();
       } else {
         del.classList.add("danger-armed");
         del.textContent = "Sure?";
@@ -838,6 +840,7 @@
         e.t = Math.min(t, Date.now());
         state.entries.sort(function (a, b) { return b.t - a.t; });
         save();
+        dbUpdateTime(e);
       }
       ui.editingId = null;
       renderCards(); renderHistory();
@@ -891,6 +894,7 @@
       if (isFinite(max24) && max24 > 0) m.max24 = max24;
     });
     save();
+    dbSaveMeds();
     renderSettingsForm();
     renderCards();
     flashButton("save-settings", "Saved ✓", "Save settings");
@@ -948,6 +952,8 @@
   function eraseAll() {
     var btn = document.getElementById("erase");
     if (btn.classList.contains("danger-armed")) {
+      state.entries.forEach(function (e) { dbDelete(e.id); });
+      if (db) db.doc("config/meds").delete().catch(noteSyncIssue);
       state = { meds: JSON.parse(JSON.stringify(DEFAULT_MEDS)), entries: [] };
       try { localStorage.removeItem(STORE_KEY); } catch (e) {}
       btn.classList.remove("danger-armed");
@@ -962,6 +968,89 @@
         btn.textContent = "Erase all data";
       }, 4000);
     }
+  }
+
+  /* ---------- persistent storage (artifact database) ---------- */
+  // Browser storage is an instant-load cache; the artifact's private
+  // database is the durable copy. Snapshots below rebuild local state,
+  // so echoes of our own writes are harmless.
+  var db = null;
+  var syncNote = document.getElementById("sync-note");
+  function setSyncNote(text) { if (syncNote) syncNote.textContent = text; }
+  function noteSyncIssue() { setSyncNote("sync issue — data kept in this browser"); }
+
+  function dbAdd(e) {
+    if (db) db.collection("entries").doc(e.id).set({ med: e.med, t: e.t, mg: e.mg }).catch(noteSyncIssue);
+  }
+  function dbUpdateTime(e) {
+    if (db) db.collection("entries").doc(e.id).update({ t: e.t }).catch(noteSyncIssue);
+  }
+  function dbDelete(id) {
+    if (db) db.collection("entries").doc(id).delete().catch(noteSyncIssue);
+  }
+  function dbSaveMeds() {
+    if (db) db.doc("config/meds").set(JSON.parse(JSON.stringify(state.meds))).catch(noteSyncIssue);
+  }
+
+  function startSync() {
+    var migrated = false;
+    db.collection("entries").onSnapshot(function (snap) {
+      var remote = [];
+      snap.docs.forEach(function (d) {
+        if (!d.exists) return;
+        var v = d.data();
+        if (v && typeof v.t === "number" && typeof v.mg === "number" && state.meds[v.med]) {
+          remote.push({ id: d.id, med: v.med, t: v.t, mg: v.mg });
+        }
+      });
+      if (!migrated) {
+        // Push doses this browser logged before the database connected
+        // (or that predate persistent storage). Re-setting an id that
+        // already exists rewrites identical data, so this is safe.
+        migrated = true;
+        var seen = {};
+        remote.forEach(function (e) { seen[e.id] = true; });
+        state.entries.forEach(function (e) {
+          if (!seen[e.id]) {
+            dbAdd(e);
+            remote.push({ id: e.id, med: e.med, t: e.t, mg: e.mg });
+          }
+        });
+      }
+      remote.sort(function (a, b) { return b.t - a.t; });
+      state.entries = remote;
+      save();
+      renderCards();
+      if (ui.editingId === null) renderHistory();
+      setSyncNote("saved to your account");
+    }, function () {
+      setSyncNote("sync unavailable — data kept in this browser");
+    });
+
+    db.doc("config/meds").onSnapshot(function (snap) {
+      if (!snap.exists) { dbSaveMeds(); return; }
+      var data = snap.data();
+      MED_ORDER.forEach(function (k) {
+        var m = data[k];
+        if (!m) return;
+        if (isFinite(m.dose) && m.dose > 0) state.meds[k].dose = m.dose;
+        if (isFinite(m.minH) && m.minH > 0) state.meds[k].minH = m.minH;
+        if (isFinite(m.max24) && m.max24 > 0) state.meds[k].max24 = m.max24;
+      });
+      save();
+      renderCards();
+      if (!document.getElementById("settings").open) renderSettingsForm();
+    });
+  }
+
+  if (window.claude && window.claude.use) {
+    window.claude.use("db").then(function (ns) {
+      if (!ns) { setSyncNote("stored in this browser only"); return; }
+      db = ns;
+      startSync();
+    }, function () { setSyncNote("stored in this browser only"); });
+  } else {
+    setSyncNote("stored in this browser only");
   }
 
   /* ---------- boot ---------- */
