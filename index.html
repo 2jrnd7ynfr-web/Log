@@ -387,6 +387,21 @@
   @media (max-width: 420px) {
     .set-grid { grid-template-columns: 1fr 1fr; }
   }
+  .set-remind {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--muted);
+  }
+  .set-remind input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--accent);
+  }
+  .set-note { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--muted); }
   .settings-actions { display: flex; flex-direction: column; gap: 10px; }
   .primary-wide {
     min-height: 48px;
@@ -437,6 +452,8 @@
     <summary>Doses, limits &amp; data</summary>
     <div class="settings-body">
       <div id="set-meds"></div>
+      <p class="set-note">Reminders arrive as Claude app notifications on your phone when a
+      dose next becomes available, and stay silent between 10&nbsp;pm and 7&nbsp;am.</p>
       <div class="settings-actions">
         <button id="save-settings" class="primary-wide" type="button">Save settings</button>
         <button id="copy-log" class="secondary-wide" type="button">Copy full log as text</button>
@@ -464,9 +481,9 @@
 
   var MED_ORDER = ["tramadol", "celecoxib", "paracetamol"];
   var DEFAULT_MEDS = {
-    tramadol:    { name: "Tramadol",    kind: "Opioid analgesic",            dose: 50,   minH: 4,  max24: 400 },
-    celecoxib:   { name: "Celecoxib",   kind: "NSAID · anti-inflammatory", dose: 200,  minH: 12, max24: 400 },
-    paracetamol: { name: "Paracetamol", kind: "Analgesic · antipyretic",   dose: 1000, minH: 4,  max24: 4000 }
+    tramadol:    { name: "Tramadol",    kind: "Opioid analgesic",            dose: 50,   minH: 4,  max24: 400,  remind: true },
+    celecoxib:   { name: "Celecoxib",   kind: "NSAID · anti-inflammatory", dose: 200,  minH: 12, max24: 400,  remind: true },
+    paracetamol: { name: "Paracetamol", kind: "Analgesic · antipyretic",   dose: 1000, minH: 4,  max24: 4000, remind: true }
   };
 
   var state = load();
@@ -481,6 +498,7 @@
     }
     MED_ORDER.forEach(function (k) {
       if (!s.meds[k]) s.meds[k] = JSON.parse(JSON.stringify(DEFAULT_MEDS[k]));
+      if (typeof s.meds[k].remind !== "boolean") s.meds[k].remind = true;
     });
     return s;
   }
@@ -869,6 +887,15 @@
       grid.appendChild(makeField("set-" + key + "-min", "min hours", m.minH, 0.5));
       grid.appendChild(makeField("set-" + key + "-max", "max mg / 24 h", m.max24, 1));
       box.appendChild(grid);
+      var remindLabel = document.createElement("label");
+      remindLabel.className = "set-remind";
+      var cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.id = "set-" + key + "-remind";
+      cb.checked = m.remind !== false;
+      remindLabel.appendChild(cb);
+      remindLabel.appendChild(document.createTextNode("Remind me when the next dose is due"));
+      box.appendChild(remindLabel);
       root.appendChild(box);
     });
   }
@@ -892,6 +919,7 @@
       if (isFinite(dose) && dose > 0) m.dose = dose;
       if (isFinite(minH) && minH > 0) m.minH = minH;
       if (isFinite(max24) && max24 > 0) m.max24 = max24;
+      m.remind = document.getElementById("set-" + key + "-remind").checked;
     });
     save();
     dbSaveMeds();
@@ -993,6 +1021,12 @@
   }
 
   function startSync() {
+    // The reminder service needs the phone's timezone to keep the
+    // 22:00–07:00 quiet hours in local time.
+    try {
+      var tz = Intl.DateTimeFormat().resolvedOptions().timeZone || null;
+      db.doc("config/device").set({ tz: tz, updated: Date.now() }).catch(function () {});
+    } catch (e) {}
     var migrated = false;
     db.collection("entries").onSnapshot(function (snap) {
       var remote = [];
@@ -1036,6 +1070,7 @@
         if (isFinite(m.dose) && m.dose > 0) state.meds[k].dose = m.dose;
         if (isFinite(m.minH) && m.minH > 0) state.meds[k].minH = m.minH;
         if (isFinite(m.max24) && m.max24 > 0) state.meds[k].max24 = m.max24;
+        if (typeof m.remind === "boolean") state.meds[k].remind = m.remind;
       });
       save();
       renderCards();
