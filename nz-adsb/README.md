@@ -32,3 +32,15 @@ PORT=3000 node server.js
 - All viewers share one upstream poll. Polling pauses after 2 minutes with no viewers.
 
 Any host that runs Node works (a Raspberry Pi, Fly.io, Render, a small VPS and so on).
+
+## Deploy free on Render
+
+The repo root has a `render.yaml` Blueprint for this app.
+
+1. Sign in at render.com with GitHub and give it access to this repo.
+2. **New → Blueprint**, pick this repo and the branch that holds `nz-adsb/`, then **Apply**.
+3. Open the `onrender.com` URL it gives you.
+
+On the free plan the service sleeps after about 15 minutes without visitors, and the
+next visit takes 30–60 seconds to wake it. Render's health checks use `/healthz`, which
+deliberately doesn't start the adsb.fi poller.

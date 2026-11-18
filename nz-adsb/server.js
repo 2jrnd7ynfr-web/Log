@@ -109,6 +109,11 @@ const PAGE = path.join(__dirname, "index.html");
 http
   .createServer((req, res) => {
     const url = new URL(req.url, "http://x");
+    if (url.pathname === "/healthz") {
+      // For hosting health checks: deliberately doesn't wake the adsb.fi poller
+      res.writeHead(200, { "Content-Type": "text/plain", "Cache-Control": "no-store" });
+      return res.end("ok");
+    }
     if (url.pathname === "/api/aircraft") {
       ensurePolling();
       const body = JSON.stringify(snapshot());

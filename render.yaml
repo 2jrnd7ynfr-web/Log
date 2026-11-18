@@ -1,0 +1,16 @@
+# Render Blueprint for NZ Skies Live (nz-adsb/).
+# In Render: New → Blueprint → pick this repo and branch → Apply.
+services:
+  - type: web
+    name: nz-skies-live
+    runtime: node
+    plan: free
+    region: singapore # closest Render region to NZ
+    rootDir: nz-adsb
+    buildCommand: echo "No build step"
+    startCommand: node server.js
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
