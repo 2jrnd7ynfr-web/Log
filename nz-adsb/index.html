@@ -224,6 +224,35 @@
   .banner.show { display: block; }
   .map-wrap { position: relative; min-height: 0; display: grid; }
 
+  /* Wind layer control */
+  .wind-ctl {
+    background: var(--surface);
+    color: var(--ink);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    box-shadow: var(--shadow);
+    padding: 8px 10px;
+    font-size: 12px;
+    width: 236px;
+  }
+  .wind-ctl .wind-row { display: flex; align-items: center; gap: 8px; }
+  .wind-ctl .wind-row span { font-weight: 600; }
+  .wind-ctl select {
+    flex: 1; min-width: 0; height: 28px;
+    border: 1px solid var(--line); border-radius: 6px;
+    background: var(--surface-2); color: var(--ink);
+    font: inherit; font-size: 12px; padding: 0 4px;
+  }
+  .wind-ctl .wind-more { display: none; margin-top: 8px; }
+  .wind-ctl.on .wind-more { display: block; }
+  .wind-ctl .bar { height: 8px; border-radius: 4px; margin: 2px 0 3px; }
+  .wind-ctl .ticks { display: flex; justify-content: space-between; color: var(--muted); font-family: var(--mono); font-size: 10px; }
+  .wind-ctl .wind-meta { color: var(--muted); margin-top: 6px; line-height: 1.4; }
+  .wind-ctl .wind-here { font-family: var(--mono); margin-top: 4px; min-height: 1.4em; }
+  .wind-ctl .wind-err { color: var(--alert); }
+  .leaflet-wind-pane { pointer-events: none; }
+  .leaflet-wind-pane canvas { position: absolute; left: 0; top: 0; pointer-events: none; }
+
   /* Aircraft markers */
   .ac-icon { background: none; border: none; }
   .ac-icon svg { display: block; overflow: visible; filter: drop-shadow(0 1px 1px rgba(0,0,0,.35)); }
@@ -268,6 +297,10 @@
       border-bottom: 1px solid var(--line);
     }
     .legend .bar { width: 150px; }
+    .wind-ctl { width: 184px; padding: 6px 8px; }
+    .wind-ctl .wind-meta { margin-top: 3px; font-size: 11px; }
+    .wind-ctl .wind-here { font-size: 11px; }
+    .leaflet-control-attribution { max-width: calc(100vw - 196px); font-size: 10px; }
   }
 </style>
 </head>
@@ -725,6 +758,7 @@
   function applyTheme() {
     for (const ac of aircraft.values()) ac.iconKey = ""; // force icon recolour
     paintLegend();
+    redrawWind();
     drawTrail();
     render();
     renderList();
@@ -746,6 +780,358 @@
     updateSheetToggle();
     setTimeout(() => map.invalidateSize(), 50);
   };
+
+  // ---------- Wind layer ----------
+  // Forecast winds from Open-Meteo (free, no key). Fetched by the browser, not
+  // server.js: Open-Meteo's free limit is per IP, and hosting providers share IPs.
+  const WIND_LEVELS = {
+    "10m":    { label: "Surface",    detail: "10 m above ground", speedScale: 0.06 },
+    "850hPa": { label: "~5,000 ft",  detail: "850 hPa",           speedScale: 0.05 },
+    "500hPa": { label: "~18,000 ft", detail: "500 hPa",           speedScale: 0.035 },
+    "250hPa": { label: "~34,000 ft", detail: "250 hPa",           speedScale: 0.025 },
+  };
+  // ~390 grid points; each counts as one call against the viewer's own free
+  // Open-Meteo allowance (10,000/day per IP), so data is cached for 3 hours.
+  const WIND_STEP = 1.5;
+  const WIND_LATS = [], WIND_LONS = [];
+  for (let la = -28; la >= -52 - 1e-9; la -= WIND_STEP) WIND_LATS.push(+la.toFixed(2));
+  for (let lo = 152; lo <= 186 + 1e-9; lo += WIND_STEP) WIND_LONS.push(+lo.toFixed(2));
+  const WIND_CACHE_KEY = "nzskies-wind-v2";
+  const WIND_MAX_AGE_MS = 3 * 3600 * 1000;
+  const WIND_ATTRIB = 'Weather <a href="https://open-meteo.com/">Open-Meteo.com</a>';
+
+  // Speed colour scale (knots); ticks on the legend sit at these values
+  const WIND_STOPS = [
+    [0, [61, 111, 182]], [10, [58, 159, 191]], [20, [76, 178, 111]], [30, [212, 193, 59]],
+    [45, [227, 130, 58]], [60, [216, 69, 63]], [90, [176, 56, 154]], [130, [108, 42, 143]],
+  ];
+  function windRGB(kn) {
+    if (kn <= 0) return WIND_STOPS[0][1];
+    for (let i = 1; i < WIND_STOPS.length; i++) {
+      const [k1, c1] = WIND_STOPS[i];
+      if (kn <= k1) {
+        const [k0, c0] = WIND_STOPS[i - 1];
+        const f = (kn - k0) / (k1 - k0);
+        return [0, 1, 2].map((j) => c0[j] + (c1[j] - c0[j]) * f);
+      }
+    }
+    return WIND_STOPS[WIND_STOPS.length - 1][1];
+  }
+
+  let windLevel = "off";
+  try { windLevel = localStorage.getItem("nzskies-wind-level") || "off"; } catch {}
+  if (windLevel !== "off" && !WIND_LEVELS[windLevel]) windLevel = "off";
+  let windData = null;      // { fetchedAt, times, levels: { key: { s: [[pt]], d: [[pt]] } } }
+  let windField = null;     // { u: Float32Array, v: Float32Array, time }
+  let windFetching = null;
+  let windError = null;
+
+  async function loadWind(force = false) {
+    if (!force && windData && Date.now() - windData.fetchedAt < WIND_MAX_AGE_MS) return windData;
+    if (!force && !windData) {
+      try {
+        const c = JSON.parse(localStorage.getItem(WIND_CACHE_KEY) || "null");
+        if (c && Date.now() - c.fetchedAt < WIND_MAX_AGE_MS) { windData = c; return c; }
+      } catch {}
+    }
+    if (windFetching) return windFetching;
+    windFetching = (async () => {
+      const qLat = [], qLon = [];
+      for (const la of WIND_LATS) for (const lo of WIND_LONS) { qLat.push(la); qLon.push(lo > 180 ? +(lo - 360).toFixed(2) : lo); }
+      const keys = Object.keys(WIND_LEVELS);
+      const hourly = keys.flatMap((k) => [`wind_speed_${k}`, `wind_direction_${k}`]).join(",");
+      const url = `https://api.open-meteo.com/v1/forecast?latitude=${qLat.join(",")}&longitude=${qLon.join(",")}` +
+        `&hourly=${hourly}&wind_speed_unit=kn&timeformat=unixtime&past_hours=2&forecast_hours=12`;
+      const res = await fetch(url);
+      const body = await res.json().catch(() => null);
+      if (!res.ok || !body || body.error) {
+        throw new Error(body && body.reason ? body.reason : `Open-Meteo returned HTTP ${res.status}`);
+      }
+      const pts = Array.isArray(body) ? body : [body];
+      if (pts.length !== qLat.length) throw new Error("Unexpected wind data shape");
+      const times = pts[0].hourly.time;
+      const levels = {};
+      for (const k of keys) {
+        // s[t][p], d[t][p]
+        levels[k] = {
+          s: times.map((_, t) => pts.map((p) => p.hourly[`wind_speed_${k}`][t])),
+          d: times.map((_, t) => pts.map((p) => p.hourly[`wind_direction_${k}`][t])),
+        };
+      }
+      const data = { fetchedAt: Date.now(), times, levels };
+      try { localStorage.setItem(WIND_CACHE_KEY, JSON.stringify(data)); } catch {}
+      windData = data;
+      return data;
+    })();
+    try { return await windFetching; } finally { windFetching = null; }
+  }
+
+  function buildWindField() {
+    windField = null;
+    if (!windData || windLevel === "off") return;
+    const lv = windData.levels[windLevel];
+    if (!lv) return;
+    const now = Date.now() / 1000;
+    let ti = 0;
+    windData.times.forEach((t, i) => { if (Math.abs(t - now) < Math.abs(windData.times[ti] - now)) ti = i; });
+    const n = WIND_LATS.length * WIND_LONS.length;
+    const u = new Float32Array(n), v = new Float32Array(n);
+    for (let p = 0; p < n; p++) {
+      const s = lv.s[ti][p], d = lv.d[ti][p];
+      if (s == null || d == null) { u[p] = NaN; v[p] = NaN; continue; }
+      // Meteorological direction is where the wind blows FROM
+      const r = d * Math.PI / 180;
+      u[p] = -s * Math.sin(r);
+      v[p] = -s * Math.cos(r);
+    }
+    windField = { u, v, time: windData.times[ti] };
+  }
+
+  // Bilinear interpolation of the wind grid; returns { u, v } in knots or null
+  function windAt(lat, lon) {
+    if (!windField) return null;
+    const fi = (WIND_LATS[0] - lat) / WIND_STEP;
+    const fj = (lon - WIND_LONS[0]) / WIND_STEP;
+    const nI = WIND_LATS.length, nJ = WIND_LONS.length;
+    if (fi < 0 || fj < 0 || fi > nI - 1 || fj > nJ - 1) return null;
+    const i0 = Math.min(Math.floor(fi), nI - 2), j0 = Math.min(Math.floor(fj), nJ - 2);
+    const di = fi - i0, dj = fj - j0;
+    const idx = (i, j) => i * nJ + j;
+    const { u, v } = windField;
+    const a = idx(i0, j0), b = idx(i0, j0 + 1), c = idx(i0 + 1, j0), d = idx(i0 + 1, j0 + 1);
+    const bl = (arr) => arr[a] * (1 - di) * (1 - dj) + arr[b] * (1 - di) * dj + arr[c] * di * (1 - dj) + arr[d] * di * dj;
+    const uu = bl(u), vv = bl(v);
+    if (Number.isNaN(uu) || Number.isNaN(vv)) return null;
+    return { u: uu, v: vv };
+  }
+
+  // 0 at the edge of the data grid, 1 from one cell inside it, so the tint has no hard border
+  function windEdgeFade(lat, lon) {
+    const dLat = Math.min(WIND_LATS[0] - lat, lat - WIND_LATS[WIND_LATS.length - 1]);
+    const dLon = Math.min(lon - WIND_LONS[0], WIND_LONS[WIND_LONS.length - 1] - lon);
+    return Math.max(0, Math.min(1, Math.min(dLat, dLon) / WIND_STEP));
+  }
+
+  // Canvases live in their own pane between the tiles and the aircraft
+  const windPane = map.createPane("wind");
+  windPane.style.zIndex = 350;
+  const tintCanvas = L.DomUtil.create("canvas", "", windPane);
+  const flowCanvas = L.DomUtil.create("canvas", "", windPane);
+  const tintCtx = tintCanvas.getContext("2d");
+  const flowCtx = flowCanvas.getContext("2d");
+  const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const FIELD_CELL = 6; // px between samples of the screen-space wind field
+  let screenField = null; // { cols, rows, vx, vy } in px/frame
+  let particles = [];
+  let windAnim = null;
+  let windW = 0, windH = 0;
+
+  function layoutWindCanvases() {
+    const size = map.getSize();
+    const dpr = window.devicePixelRatio || 1;
+    windW = size.x; windH = size.y;
+    const topLeft = map.containerPointToLayerPoint([0, 0]);
+    L.DomUtil.setPosition(tintCanvas, topLeft);
+    L.DomUtil.setPosition(flowCanvas, topLeft);
+    flowCanvas.style.width = size.x + "px";
+    flowCanvas.style.height = size.y + "px";
+    flowCanvas.width = Math.round(size.x * dpr);
+    flowCanvas.height = Math.round(size.y * dpr);
+    flowCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+
+  function drawWindTint() {
+    const cols = Math.ceil(windW / FIELD_CELL) + 1, rows = Math.ceil(windH / FIELD_CELL) + 1;
+    tintCanvas.width = cols; tintCanvas.height = rows; // upscaled smoothly by CSS
+    tintCanvas.style.width = cols * FIELD_CELL + "px";
+    tintCanvas.style.height = rows * FIELD_CELL + "px";
+    const img = tintCtx.createImageData(cols, rows);
+    const vx = new Float32Array(cols * rows), vy = new Float32Array(cols * rows);
+    const scale = WIND_LEVELS[windLevel].speedScale;
+    const alpha = isDark() ? 105 : 72;
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const ll = map.containerPointToLatLng([c * FIELD_CELL, r * FIELD_CELL]);
+        const w = windAt(ll.lat, ll.lng < 0 ? ll.lng + 360 : ll.lng);
+        const k = r * cols + c;
+        if (!w) { vx[k] = NaN; continue; }
+        vx[k] = w.u * scale; vy[k] = -w.v * scale;
+        const [R, G, B] = windRGB(Math.hypot(w.u, w.v));
+        img.data[k * 4] = R; img.data[k * 4 + 1] = G; img.data[k * 4 + 2] = B;
+        img.data[k * 4 + 3] = alpha * windEdgeFade(ll.lat, ll.lng < 0 ? ll.lng + 360 : ll.lng);
+      }
+    }
+    tintCtx.putImageData(img, 0, 0);
+    screenField = { cols, rows, vx, vy };
+  }
+
+  function fieldAt(x, y) {
+    if (!screenField) return null;
+    const { cols, rows, vx, vy } = screenField;
+    const fx = x / FIELD_CELL, fy = y / FIELD_CELL;
+    const c0 = Math.floor(fx), r0 = Math.floor(fy);
+    if (c0 < 0 || r0 < 0 || c0 >= cols - 1 || r0 >= rows - 1) return null;
+    const dx = fx - c0, dy = fy - r0;
+    const a = r0 * cols + c0, b = a + 1, c = a + cols, d = c + 1;
+    const ux = vx[a] * (1 - dx) * (1 - dy) + vx[b] * dx * (1 - dy) + vx[c] * (1 - dx) * dy + vx[d] * dx * dy;
+    if (Number.isNaN(ux)) return null;
+    const uy = vy[a] * (1 - dx) * (1 - dy) + vy[b] * dx * (1 - dy) + vy[c] * (1 - dx) * dy + vy[d] * dx * dy;
+    return [ux, uy];
+  }
+
+  function spawn(p) {
+    p.x = Math.random() * windW;
+    p.y = Math.random() * windH;
+    p.age = 0;
+    p.max = 40 + Math.random() * 80;
+    return p;
+  }
+
+  function resetParticles() {
+    const n = Math.min(2600, Math.round(windW * windH / 320));
+    particles = Array.from({ length: n }, () => spawn({}));
+    flowCtx.clearRect(0, 0, windW, windH);
+  }
+
+  function animateWind() {
+    windAnim = requestAnimationFrame(animateWind);
+    const ctx = flowCtx;
+    // Fade the previous frame to leave short trails
+    ctx.globalCompositeOperation = "destination-in";
+    ctx.fillStyle = "rgba(0,0,0,0.9)";
+    ctx.fillRect(0, 0, windW, windH);
+    ctx.globalCompositeOperation = "source-over";
+    ctx.strokeStyle = isDark() ? "rgba(235,242,248,0.8)" : "rgba(24,33,43,0.6)";
+    ctx.lineWidth = 1.1;
+    ctx.beginPath();
+    for (const p of particles) {
+      const f = p.age++ < p.max ? fieldAt(p.x, p.y) : null;
+      if (!f) { spawn(p); continue; }
+      const nx = p.x + f[0], ny = p.y + f[1];
+      ctx.moveTo(p.x, p.y);
+      ctx.lineTo(nx, ny);
+      p.x = nx; p.y = ny;
+    }
+    ctx.stroke();
+  }
+
+  function stopWindAnim() {
+    if (windAnim) cancelAnimationFrame(windAnim);
+    windAnim = null;
+  }
+
+  function redrawWind() {
+    stopWindAnim();
+    if (windLevel === "off" || !windField) {
+      windPane.style.display = "none";
+      return;
+    }
+    windPane.style.display = "";
+    layoutWindCanvases();
+    drawWindTint();
+    resetParticles();
+    if (!reduceMotion && !document.hidden) animateWind();
+  }
+
+  map.on("zoomstart", () => { if (windLevel !== "off") { stopWindAnim(); windPane.style.display = "none"; } });
+  map.on("moveend resize", redrawWind);
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) stopWindAnim();
+    else if (windLevel !== "off" && windField && !windAnim && !reduceMotion) animateWind();
+  });
+
+  // Control
+  const windCtl = L.control({ position: "topright" });
+  windCtl.onAdd = () => {
+    const d = L.DomUtil.create("div", "wind-ctl");
+    const ticks = WIND_STOPS.map(([k]) => `<span>${k}</span>`).join("");
+    d.innerHTML = `
+      <label class="wind-row"><span>Wind</span>
+        <select id="windLevel" aria-label="Wind layer">
+          <option value="off">Off</option>
+          ${Object.entries(WIND_LEVELS).map(([k, l]) => `<option value="${k}">${l.label}</option>`).join("")}
+        </select></label>
+      <div class="wind-more">
+        <div class="bar" id="windBar"></div>
+        <div class="ticks">${ticks}</div>
+        <div class="wind-here" id="windHere">${matchMedia("(hover: none)").matches ? "Tap" : "Point at"} the map for wind there</div>
+        <div class="wind-meta" id="windMeta"></div>
+      </div>`;
+    L.DomEvent.disableClickPropagation(d);
+    L.DomEvent.disableScrollPropagation(d);
+    return d;
+  };
+  windCtl.addTo(map);
+  const windCtlEl = windCtl.getContainer();
+  const windSelect = document.getElementById("windLevel");
+  const windMeta = document.getElementById("windMeta");
+  const windHere = document.getElementById("windHere");
+  document.getElementById("windBar").style.background = `linear-gradient(90deg, ${
+    WIND_STOPS.map(([, c], i) => `rgb(${c.join(",")}) ${(i / (WIND_STOPS.length - 1) * 100).toFixed(1)}%`).join(",")})`;
+  windSelect.value = windLevel;
+
+  function updateWindMeta() {
+    if (windError) {
+      windMeta.innerHTML = `<span class="wind-err">${esc(windError)}</span>`;
+    } else if (windFetching && !windField) {
+      windMeta.textContent = "Loading forecast…";
+    } else if (windField) {
+      const t = new Date(windField.time * 1000).toLocaleString("en-NZ", {
+        timeZone: "Pacific/Auckland", weekday: "short", hour: "numeric", minute: "2-digit",
+      });
+      windMeta.textContent = `${WIND_LEVELS[windLevel].detail} · forecast for ${t} NZ time · knots`;
+    } else {
+      windMeta.textContent = "";
+    }
+  }
+
+  function showWindAt(latlng) {
+    if (windLevel === "off") return;
+    const w = windAt(latlng.lat, latlng.lng < 0 ? latlng.lng + 360 : latlng.lng);
+    if (!w) { windHere.textContent = "No wind data here"; return; }
+    const spd = Math.hypot(w.u, w.v);
+    const from = (Math.atan2(-w.u, -w.v) * 180 / Math.PI + 360) % 360;
+    windHere.textContent = spd < 1 ? "Calm" : `From ${from.toFixed(0).padStart(3, "0")}° at ${spd.toFixed(0)} kt`;
+  }
+  map.on("mousemove", (e) => showWindAt(e.latlng));
+  map.on("click", (e) => showWindAt(e.latlng));
+
+  async function setWindLevel(level) {
+    windLevel = level;
+    try { localStorage.setItem("nzskies-wind-level", level); } catch {}
+    windCtlEl.classList.toggle("on", level !== "off");
+    if (level === "off") {
+      map.attributionControl.removeAttribution(WIND_ATTRIB);
+      buildWindField();
+      redrawWind();
+      return;
+    }
+    map.attributionControl.addAttribution(WIND_ATTRIB);
+    windError = null;
+    const loading = loadWind();
+    updateWindMeta();
+    try {
+      await loading;
+    } catch (e) {
+      windError = e && e.name === "TypeError" ? "Couldn't reach Open-Meteo" : (e.message || "Wind data unavailable");
+    }
+    if (windLevel !== level) return; // changed while loading
+    buildWindField();
+    redrawWind();
+    updateWindMeta();
+  }
+  windSelect.addEventListener("change", () => setWindLevel(windSelect.value));
+  setWindLevel(windLevel);
+
+  // Keep the forecast hour current, and refresh the data when it gets old
+  setInterval(async () => {
+    if (windLevel === "off") return;
+    const before = windField && windField.time;
+    try { await loadWind(); windError = null; } catch {}
+    buildWindField();
+    if (!windField || windField.time !== before) redrawWind();
+    updateWindMeta();
+  }, 10 * 60 * 1000);
 
   // ---------- Loops ----------
   setInterval(render, 1000);

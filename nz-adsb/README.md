@@ -10,6 +10,19 @@ and a link to it on globe.adsb.fi. Emergency squawks (7500/7600/7700) are flagge
 sorted to the top. Positions are dead-reckoned between updates so movement looks smooth.
 Works on phones, and has light and dark themes.
 
+## Wind layer
+
+The **Wind** box at the top right of the map overlays forecast winds at the surface,
+~5,000 ft (850 hPa), ~18,000 ft (500 hPa) or ~34,000 ft (250 hPa). Flowing particles show
+direction and a colour tint shows speed in knots. Point at (or tap) the map for the wind at
+that spot.
+
+Wind data comes from [Open-Meteo](https://open-meteo.com/) (free, no key, CC BY 4.0). The
+browser fetches it directly rather than `server.js`, because Open-Meteo's free allowance
+(10,000 calls a day) is counted per IP address and hosting providers share IPs between
+customers. A load fetches a ~390-point grid and is cached in the browser for 3 hours.
+The data is only fetched while the layer is switched on.
+
 ## Run it
 
 Needs Node 18 or newer. There are no dependencies to install.
