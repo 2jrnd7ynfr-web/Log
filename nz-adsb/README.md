@@ -3,7 +3,7 @@
 A live map of aircraft over New Zealand, using the free
 [adsb.fi open data API](https://github.com/adsbfi/opendata) (the feed behind globe.adsb.fi).
 
-Planes are drawn on a Leaflet/CARTO map, rotated to their track and
+Planes are drawn on a Leaflet/OpenStreetMap map, rotated to their track and
 coloured by altitude. Click a plane (or a row in the list) for callsign, rego, type,
 altitude, speed, vertical rate, squawk and so on, plus its trail since you opened the page
 and a link to it on globe.adsb.fi. Emergency squawks (7500/7600/7700) are flagged and

@@ -235,6 +235,16 @@
   }
   .ac-label::before { display: none; }
   .leaflet-container { font-family: var(--sans); }
+  /* Mute the OSM colours so aircraft stand out; invert them for dark mode */
+  .leaflet-tile-pane { filter: saturate(0.45) contrast(0.92) brightness(1.04); }
+  :root[data-theme="dark"] .leaflet-tile-pane {
+    filter: invert(1) hue-rotate(180deg) saturate(0.35) brightness(0.85) contrast(0.9);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .leaflet-tile-pane {
+      filter: invert(1) hue-rotate(180deg) saturate(0.35) brightness(0.85) contrast(0.9);
+    }
+  }
   .leaflet-bar a { background: var(--surface); color: var(--ink); border-color: var(--line); }
   .leaflet-control-attribution { background: color-mix(in srgb, var(--surface) 85%, transparent) !important; color: var(--muted); }
   .leaflet-control-attribution a { color: var(--accent); }
@@ -332,13 +342,12 @@
     preferCanvas: false,
   }).fitBounds(NZ_BOUNDS);
 
-  const tileUrl = (dark) =>
-    `https://{s}.basemaps.cartocdn.com/${dark ? "dark_all" : "light_all"}/{z}/{x}/{y}{r}.png`;
-  const tiles = L.tileLayer(tileUrl(isDark()), {
-    subdomains: "abcd",
-    maxZoom: 18,
+  // OpenStreetMap's standard tiles need no API key. They have no dark style, so
+  // dark mode darkens them with a CSS filter (see .leaflet-tile-pane).
+  const tiles = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
     attribution:
-      '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a> · Data <a href="https://adsb.fi">adsb.fi</a>',
+      '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors · Data <a href="https://adsb.fi">adsb.fi</a>',
   }).addTo(map);
 
   const trailLayer = L.layerGroup().addTo(map);
@@ -714,7 +723,6 @@
   };
 
   function applyTheme() {
-    tiles.setUrl(tileUrl(isDark()));
     for (const ac of aircraft.values()) ac.iconKey = ""; // force icon recolour
     paintLegend();
     drawTrail();
