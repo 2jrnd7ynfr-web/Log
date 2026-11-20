@@ -10,6 +10,23 @@ and a link to it on globe.adsb.fi. Emergency squawks (7500/7600/7700) are flagge
 sorted to the top. Positions are dead-reckoned between updates so movement looks smooth.
 Works on phones, and has light and dark themes.
 
+## Layers
+
+The **Layers** panel at the top right of the map (collapsed by default on phones) has:
+
+- **Airport weather**: the latest METAR at each NZ airport, coloured by flight category
+  (VFR / MVFR / IFR / LIFR) and labelled with the wind. Click one for the decoded report,
+  the raw METAR and the TAF. Data comes from NOAA's Aviation Weather Center through
+  `server.js` (`/api/airports`, cached 10 minutes), because aviationweather.gov doesn't
+  allow browser requests. It only has the airports NZ shares internationally: Auckland,
+  Hamilton, Ohakea, Wellington, Christchurch, Queenstown and Dunedin. The smaller NZ
+  stations are only published by MetService, which needs a login or a paid key.
+- **Rain radar**: the last two hours of radar in 10-minute frames from
+  [RainViewer](https://www.rainviewer.com/), with play/pause and a time slider. The browser
+  fetches it directly. RainViewer's free tier stops at zoom 7, so closer in, the zoom-7 images
+  are enlarged.
+- **Wind**: see below.
+
 ## Wind layer
 
 The **Wind** box at the top right of the map overlays forecast winds at the surface,

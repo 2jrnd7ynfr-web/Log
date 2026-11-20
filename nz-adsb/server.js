@@ -104,6 +104,90 @@ function snapshot() {
   return { now, aircraft, ok: !!lastOkAt, lastOkAt, error: lastError };
 }
 
+// ---------- Airport weather (METAR/TAF from NOAA's Aviation Weather Center) ----------
+// aviationweather.gov sends no CORS headers, so the browser can't call it directly.
+// It only has the NZ airports that report internationally (the main ones), but
+// asking for every NZ aerodrome with a weather station means any that appear are shown.
+// (A bounding-box query misses some NZ airports and picks up Norfolk Island.)
+const AWC = "https://aviationweather.gov/api/data";
+const NZ_IDS = [
+  "NZAA", "NZAP", "NZAR", "NZAS", "NZCH", "NZCI", "NZCX", "NZDA", "NZDN", "NZFX", "NZGB", "NZGM",
+  "NZGS", "NZHK", "NZHN", "NZKI", "NZKK", "NZKO", "NZKT", "NZLX", "NZMA", "NZMC", "NZMF", "NZMO",
+  "NZMS", "NZNP", "NZNR", "NZNS", "NZNV", "NZOH", "NZOU", "NZPM", "NZPP", "NZQN", "NZRA", "NZRC",
+  "NZRO", "NZRT", "NZTG", "NZTH", "NZTK", "NZTL", "NZTU", "NZUK", "NZWB", "NZWF", "NZWK", "NZWL",
+  "NZWN", "NZWO", "NZWP", "NZWR", "NZWS", "NZWT", "NZWU",
+].join(",");
+const AIRPORT_TTL_MS = 10 * 60 * 1000;
+let airportCache = { fetchedAt: 0, airports: [], error: null };
+let airportFetch = null;
+
+async function awc(endpoint) {
+  const res = await fetch(`${AWC}/${endpoint}`, {
+    headers: { "User-Agent": "nz-skies-live/1.0", Accept: "application/json" },
+    signal: AbortSignal.timeout(15000),
+  });
+  if (res.status === 204) return [];
+  if (!res.ok) throw new Error(`aviationweather.gov HTTP ${res.status}`);
+  return res.json();
+}
+
+async function fetchAirports() {
+  const [metars, tafs] = await Promise.all([
+    awc(`metar?ids=${NZ_IDS}&format=json&hours=3`),
+    awc(`taf?ids=${NZ_IDS}&format=json`).catch(() => []),
+  ]);
+  // Several hours are requested so hourly reporters are included; keep the newest per airport
+  const latest = new Map();
+  for (const m of metars) {
+    const prev = latest.get(m.icaoId);
+    if (!prev || m.obsTime > prev.obsTime) latest.set(m.icaoId, m);
+  }
+  const tafBy = new Map();
+  for (const t of tafs) {
+    const prev = tafBy.get(t.icaoId);
+    if (!prev || t.issueTime > prev.issueTime) tafBy.set(t.icaoId, t);
+  }
+  const toUnix = (v) => (typeof v === "number" ? v : Math.floor(Date.parse(v) / 1000));
+  const cleanName = (n) => String(n || "").replace(/,\s*[A-Z]{2,3},\s*NZ$/, "").replace(/\bIntl\b/, "International").replace(/\bArpt\b/, "Airport");
+  const ids = new Set([...latest.keys(), ...tafBy.keys()]);
+  return [...ids].sort().flatMap((icao) => {
+    const m = latest.get(icao);
+    const t = tafBy.get(icao);
+    const base = m || t;
+    // NZ codes also cover Antarctic fields (e.g. NZFX McMurdo), which are off this map
+    if (!(base.lat > -53 && base.lat < -28)) return [];
+    return [{
+      icao,
+      name: cleanName(base.name),
+      lat: base.lat,
+      lon: base.lon,
+      metar: m ? {
+        raw: m.rawOb, obsTime: toUnix(m.obsTime), fltCat: m.fltCat || null,
+        wdir: m.wdir, wspd: m.wspd, wgst: m.wgst, visib: m.visib,
+        clouds: m.clouds || [], cover: m.cover, wxString: m.wxString || null,
+        temp: m.temp, dewp: m.dewp, altim: m.altim,
+      } : null,
+      taf: t ? { raw: t.rawTAF, issueTime: toUnix(t.issueTime) } : null,
+    }];
+  });
+}
+
+async function getAirports() {
+  if (Date.now() - airportCache.fetchedAt < AIRPORT_TTL_MS) return airportCache;
+  if (!airportFetch) {
+    airportFetch = fetchAirports()
+      .then((airports) => { airportCache = { fetchedAt: Date.now(), airports, error: null }; })
+      .catch((e) => {
+        console.warn(`[aviationweather] ${e.message}`);
+        // Keep serving the last good data, and retry in a minute rather than on every request
+        airportCache = { ...airportCache, error: e.message, fetchedAt: Date.now() - AIRPORT_TTL_MS + 60000 };
+      })
+      .finally(() => { airportFetch = null; });
+  }
+  await airportFetch;
+  return airportCache;
+}
+
 const PAGE = path.join(__dirname, "index.html");
 
 http
@@ -113,6 +197,20 @@ http
       // For hosting health checks: deliberately doesn't wake the adsb.fi poller
       res.writeHead(200, { "Content-Type": "text/plain", "Cache-Control": "no-store" });
       return res.end("ok");
+    }
+    if (url.pathname === "/api/airports") {
+      return getAirports().then((c) => {
+        res.writeHead(200, {
+          "Content-Type": "application/json",
+          "Cache-Control": "no-store",
+          "Access-Control-Allow-Origin": "*",
+        });
+        res.end(JSON.stringify({
+          fetchedAt: Math.floor((c.airports.length ? c.fetchedAt : Date.now()) / 1000),
+          airports: c.airports,
+          error: c.error,
+        }));
+      });
     }
     if (url.pathname === "/api/aircraft") {
       ensurePolling();

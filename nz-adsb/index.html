@@ -250,6 +250,55 @@
   .wind-ctl .wind-meta { color: var(--muted); margin-top: 6px; line-height: 1.4; }
   .wind-ctl .wind-here { font-family: var(--mono); margin-top: 4px; min-height: 1.4em; }
   .wind-ctl .wind-err { color: var(--alert); }
+  .wind-ctl .lyr-head {
+    display: flex; justify-content: space-between; width: 100%;
+    background: none; border: none; color: var(--ink); padding: 0 0 6px;
+    font: inherit; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; cursor: pointer;
+  }
+  .wind-ctl.collapsed .lyr-head { padding-bottom: 0; }
+  .wind-ctl.collapsed .lyr-head span { display: inline-block; transform: rotate(-90deg); }
+  .wind-ctl.collapsed .lyr-body { display: none; }
+  .wind-ctl .lyr-sec { border-top: 1px solid var(--line); padding: 7px 0; }
+  .wind-ctl .lyr-sec:last-child { padding-bottom: 0; }
+  .wind-ctl .lyr-row { display: flex; align-items: center; gap: 8px; font-weight: 600; cursor: pointer; min-height: 24px; }
+  .wind-ctl .lyr-row input { margin: 0; width: 15px; height: 15px; accent-color: var(--accent); }
+  .wind-ctl .lyr-more { display: none; margin-top: 6px; }
+  .wind-ctl .lyr-sec.on .lyr-more { display: block; }
+  .fc-chips { display: flex; gap: 10px; font-family: var(--mono); font-size: 11px; }
+  .fc-chips i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; vertical-align: -1px; }
+  .radar-bar { display: flex; align-items: center; gap: 8px; }
+  .radar-bar .icon-btn { height: 26px; min-width: 30px; padding: 0 6px; font-size: 11px; }
+  .radar-bar input { flex: 1; min-width: 0; accent-color: var(--accent); }
+  .radar-scale { display: flex; align-items: center; gap: 6px; margin-top: 6px; color: var(--muted); font-size: 11px; }
+  .radar-ramp { flex: 1; height: 7px; border-radius: 4px;
+    background: linear-gradient(90deg, #88ddee, #0099cc, #0077aa, #ffee00, #ffaa00, #ff4400, #c10000, #ffaaff); }
+
+  /* Airport markers and popups */
+  .ap-icon { background: none; border: none; }
+  .ap-pill {
+    display: inline-flex; align-items: center; gap: 4px; white-space: nowrap;
+    background: var(--surface); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 10px; padding: 1px 6px 1px 3px; box-shadow: var(--shadow);
+    font-family: var(--mono); font-size: 11px; font-weight: 600; cursor: pointer;
+    transform: translate(-8px, -50%); /* dot sits on the airport */
+  }
+  .ap-pill i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; border: 1px solid rgba(0,0,0,.25); }
+  .ap-pill small { font-weight: 400; color: var(--muted); }
+  .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: var(--surface); color: var(--ink); box-shadow: var(--shadow); }
+  .leaflet-popup-content { margin: 12px 14px; font-size: 13px; line-height: 1.4; width: 280px !important; max-width: calc(100vw - 80px); }
+  .leaflet-container a.leaflet-popup-close-button { color: var(--muted); }
+  .ap-pop h3 { margin: 0; font-size: 15px; }
+  .ap-pop .fc { display: inline-block; font-family: var(--mono); font-size: 11px; font-weight: 600; color: #fff; border-radius: 4px; padding: 1px 6px; margin-left: 6px; vertical-align: 2px; }
+  .ap-pop .sub { color: var(--muted); font-size: 12px; margin: 2px 0 8px; }
+  .ap-pop dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 0 0 8px; }
+  .ap-pop dt { color: var(--muted); font-size: 12px; }
+  .ap-pop dd { margin: 0; font-family: var(--mono); font-size: 12px; }
+  .ap-pop pre {
+    margin: 4px 0 8px; padding: 6px 8px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px;
+    font-family: var(--mono); font-size: 11px; white-space: pre-wrap; word-break: break-word;
+  }
+  .ap-pop .lbl { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+
   .leaflet-wind-pane { pointer-events: none; }
   .leaflet-wind-pane canvas { position: absolute; left: 0; top: 0; pointer-events: none; }
 
@@ -298,6 +347,10 @@
     }
     .legend .bar { width: 150px; }
     .wind-ctl { width: 184px; padding: 6px 8px; }
+    .fc-chips { gap: 6px; font-size: 10px; }
+    /* Map is about half the screen on phones; keep the panel inside it */
+    .wind-ctl .lyr-body { max-height: calc(54dvh - 170px); overflow-y: auto; }
+    body:has(aside.collapsed) .wind-ctl .lyr-body { max-height: calc(100dvh - 260px); }
     .wind-ctl .wind-meta { margin-top: 3px; font-size: 11px; }
     .wind-ctl .wind-here { font-size: 11px; }
     .leaflet-control-attribution { max-width: calc(100vw - 196px); font-size: 10px; }
@@ -535,6 +588,7 @@
         const now = data.now;
         clockOffset = now - Date.now() / 1000;
         ingest(data.aircraft || [], now);
+        if (!document.querySelector("#list .row")) renderList(); // don't wait for the 3 s refresh
         lastOk = data.lastOkAt || Date.now();
         failStreak = 0;
         setStatus(true);
@@ -1040,12 +1094,41 @@
     else if (windLevel !== "off" && windField && !windAnim && !reduceMotion) animateWind();
   });
 
+  // Flight categories used by the airport weather layer
+  const FLT_CAT = {
+    VFR:  { color: "#2FA866", text: "Visual flight rules" },
+    MVFR: { color: "#2F7FD8", text: "Marginal VFR" },
+    IFR:  { color: "#D8453F", text: "Instrument flight rules" },
+    LIFR: { color: "#B0389A", text: "Low IFR" },
+  };
+
   // Control
   const windCtl = L.control({ position: "topright" });
   windCtl.onAdd = () => {
     const d = L.DomUtil.create("div", "wind-ctl");
     const ticks = WIND_STOPS.map(([k]) => `<span>${k}</span>`).join("");
     d.innerHTML = `
+      <button class="lyr-head" id="lyrHead" aria-expanded="true">Layers <span aria-hidden="true">▾</span></button>
+      <div class="lyr-body">
+      <div class="lyr-sec" id="apSec">
+        <label class="lyr-row"><input type="checkbox" id="apToggle"><span>Airport weather</span></label>
+        <div class="lyr-more">
+          <div class="fc-chips">${Object.entries(FLT_CAT).map(([k, c]) => `<span title="${c.text}"><i style="background:${c.color}"></i>${k}</span>`).join("")}</div>
+          <div class="wind-meta" id="apMeta"></div>
+        </div>
+      </div>
+      <div class="lyr-sec" id="rdSec">
+        <label class="lyr-row"><input type="checkbox" id="radarToggle"><span>Rain radar</span></label>
+        <div class="lyr-more">
+          <div class="radar-bar">
+            <button class="icon-btn" id="radarPlay" aria-label="Play radar loop">▶</button>
+            <input type="range" id="radarSlider" min="0" max="0" value="0" aria-label="Radar time">
+          </div>
+          <div class="radar-scale"><span>Light</span><span class="radar-ramp"></span><span>Heavy</span></div>
+          <div class="wind-meta" id="radarMeta"></div>
+        </div>
+      </div>
+      <div class="lyr-sec">
       <label class="wind-row"><span>Wind</span>
         <select id="windLevel" aria-label="Wind layer">
           <option value="off">Off</option>
@@ -1056,6 +1139,8 @@
         <div class="ticks">${ticks}</div>
         <div class="wind-here" id="windHere">${matchMedia("(hover: none)").matches ? "Tap" : "Point at"} the map for wind there</div>
         <div class="wind-meta" id="windMeta"></div>
+      </div>
+      </div>
       </div>`;
     L.DomEvent.disableClickPropagation(d);
     L.DomEvent.disableScrollPropagation(d);
@@ -1122,6 +1207,263 @@
   }
   windSelect.addEventListener("change", () => setWindLevel(windSelect.value));
   setWindLevel(windLevel);
+
+  // Collapsible layers panel (starts collapsed on phones)
+  const lyrHead = document.getElementById("lyrHead");
+  let lyrCollapsed = matchMedia("(max-width: 760px)").matches;
+  try { const c = localStorage.getItem("nzskies-layers-collapsed"); if (c !== null) lyrCollapsed = c === "1"; } catch {}
+  const syncLyr = () => {
+    windCtlEl.classList.toggle("collapsed", lyrCollapsed);
+    lyrHead.setAttribute("aria-expanded", String(!lyrCollapsed));
+  };
+  syncLyr();
+  lyrHead.onclick = () => {
+    lyrCollapsed = !lyrCollapsed;
+    try { localStorage.setItem("nzskies-layers-collapsed", lyrCollapsed ? "1" : "0"); } catch {}
+    syncLyr();
+  };
+
+  const nzTime = (unixS) => new Date(unixS * 1000).toLocaleTimeString("en-NZ", {
+    timeZone: "Pacific/Auckland", hour: "numeric", minute: "2-digit",
+  });
+  const agoText = (unixS) => {
+    const m = Math.round((Date.now() / 1000 - unixS) / 60);
+    return m < 1 ? "just now" : m < 60 ? `${m} min ago` : `${Math.floor(m / 60)} h ${m % 60} min ago`;
+  };
+
+  // ---------- Rain radar (RainViewer) ----------
+  // Free RainViewer tiles: past ~2 h in 10-minute frames, zoom 7 at most
+  // (Leaflet enlarges zoom-7 tiles beyond that), one colour scheme.
+  const RADAR_ATTRIB = 'Radar <a href="https://www.rainviewer.com/">RainViewer</a>';
+  const radarPane = map.createPane("radar");
+  radarPane.style.zIndex = 330;
+  radarPane.style.pointerEvents = "none";
+  const radarSec = document.getElementById("rdSec");
+  const radarToggle = document.getElementById("radarToggle");
+  const radarSlider = document.getElementById("radarSlider");
+  const radarPlayBtn = document.getElementById("radarPlay");
+  const radarMeta = document.getElementById("radarMeta");
+  let radarOn = false;
+  try { radarOn = localStorage.getItem("nzskies-radar") === "1"; } catch {}
+  let radarFrames = [];      // [{ time, path }]
+  let radarHost = "";
+  let radarIdx = -1;
+  const radarLayers = new Map(); // path -> L.TileLayer
+  let radarTimer = null;
+  let radarRefreshTimer = null;
+  const RADAR_OPACITY = 0.7;
+
+  function radarLayerFor(frame) {
+    let lyr = radarLayers.get(frame.path);
+    if (!lyr) {
+      lyr = L.tileLayer(`${radarHost}${frame.path}/256/{z}/{x}/{y}/2/1_1.png`, {
+        pane: "radar", opacity: 0, maxNativeZoom: 7, maxZoom: 19, tileSize: 256,
+        zIndex: frame.time, className: "radar-tiles",
+      });
+      radarLayers.set(frame.path, lyr);
+    }
+    if (!map.hasLayer(lyr)) lyr.addTo(map);
+    return lyr;
+  }
+
+  function showRadarFrame(i) {
+    if (!radarFrames.length) return;
+    radarIdx = (i + radarFrames.length) % radarFrames.length;
+    const frame = radarFrames[radarIdx];
+    const cur = radarLayerFor(frame);
+    // Preload the next frame while playing so the loop doesn't flicker
+    if (radarTimer) radarLayerFor(radarFrames[(radarIdx + 1) % radarFrames.length]);
+    for (const [path, lyr] of radarLayers) lyr.setOpacity(path === frame.path ? RADAR_OPACITY : 0);
+    cur.setOpacity(RADAR_OPACITY);
+    radarSlider.value = String(radarIdx);
+    const latest = radarIdx === radarFrames.length - 1;
+    radarMeta.textContent = `${nzTime(frame.time)} NZ time · ${agoText(frame.time)}${latest ? " (latest)" : ""}`;
+  }
+
+  function stopRadarLoop() {
+    clearTimeout(radarTimer);
+    radarTimer = null;
+    radarPlayBtn.textContent = "▶";
+    radarPlayBtn.setAttribute("aria-label", "Play radar loop");
+  }
+  function radarTick() {
+    const atEnd = radarIdx >= radarFrames.length - 1;
+    showRadarFrame(atEnd ? 0 : radarIdx + 1);
+    // Hold a beat on the latest frame before wrapping round
+    radarTimer = setTimeout(radarTick, radarIdx === radarFrames.length - 1 ? 1800 : 600);
+  }
+  function startRadarLoop() {
+    if (radarFrames.length < 2) return;
+    radarPlayBtn.textContent = "❚❚";
+    radarPlayBtn.setAttribute("aria-label", "Pause radar loop");
+    radarTimer = setTimeout(radarTick, 50);
+  }
+  radarPlayBtn.onclick = () => (radarTimer ? stopRadarLoop() : startRadarLoop());
+  radarSlider.addEventListener("input", () => { stopRadarLoop(); showRadarFrame(Number(radarSlider.value)); });
+
+  async function loadRadarFrames() {
+    const res = await fetch("https://api.rainviewer.com/public/weather-maps.json", { cache: "no-store" });
+    if (!res.ok) throw new Error(`RainViewer returned HTTP ${res.status}`);
+    const data = await res.json();
+    const frames = (data.radar && data.radar.past) || [];
+    if (!frames.length) throw new Error("No radar frames available");
+    const wasLatest = radarIdx === -1 || radarIdx === radarFrames.length - 1;
+    radarHost = data.host;
+    // Drop layers for frames that have aged out
+    const keep = new Set(frames.map((f) => f.path));
+    for (const [path, lyr] of radarLayers) {
+      if (!keep.has(path)) { map.removeLayer(lyr); radarLayers.delete(path); }
+    }
+    radarFrames = frames;
+    radarSlider.max = String(frames.length - 1);
+    if (wasLatest && !radarTimer) showRadarFrame(frames.length - 1);
+  }
+
+  async function setRadar(on) {
+    radarOn = on;
+    radarToggle.checked = on;
+    radarSec.classList.toggle("on", on);
+    try { localStorage.setItem("nzskies-radar", on ? "1" : "0"); } catch {}
+    if (!on) {
+      stopRadarLoop();
+      clearInterval(radarRefreshTimer);
+      for (const lyr of radarLayers.values()) map.removeLayer(lyr);
+      radarLayers.clear();
+      radarFrames = []; radarIdx = -1;
+      map.attributionControl.removeAttribution(RADAR_ATTRIB);
+      return;
+    }
+    map.attributionControl.addAttribution(RADAR_ATTRIB);
+    radarMeta.textContent = "Loading radar…";
+    const refresh = async () => {
+      try { await loadRadarFrames(); }
+      catch (e) { if (radarOn) radarMeta.innerHTML = `<span class="wind-err">${esc(e.name === "TypeError" ? "Couldn't reach RainViewer" : e.message)}</span>`; }
+    };
+    await refresh();
+    clearInterval(radarRefreshTimer);
+    radarRefreshTimer = setInterval(() => { if (radarOn) refresh(); }, 5 * 60 * 1000);
+  }
+  radarToggle.addEventListener("change", () => setRadar(radarToggle.checked));
+  if (radarOn) setRadar(true);
+
+  // ---------- Airport weather (METAR / TAF via server.js) ----------
+  const AP_ATTRIB = 'METAR/TAF <a href="https://aviationweather.gov/">NOAA AWC</a>';
+  const apPane = map.createPane("airports");
+  // Above the aircraft (600): busy airports are covered by traffic otherwise, and
+  // an aircraft hidden under a label can still be picked from the list
+  apPane.style.zIndex = 610;
+  const apLayer = L.layerGroup();
+  const apSec = document.getElementById("apSec");
+  const apToggle = document.getElementById("apToggle");
+  const apMeta = document.getElementById("apMeta");
+  let apOn = false;
+  try { apOn = localStorage.getItem("nzskies-airports") === "1"; } catch {}
+  let apTimer = null;
+  let apOpenIcao = null;
+  const apMarkers = new Map();
+
+  const kmFromSM = (v) => {
+    if (v == null || v === "") return "—";
+    if (typeof v === "string" && v.trim().endsWith("+")) return "10 km or more";
+    const n = Number(v);
+    if (!Number.isFinite(n)) return String(v);
+    return n * 1.609 >= 9.95 ? "10 km or more" : `${(n * 1.609).toFixed(n < 3 ? 1 : 0)} km`;
+  };
+  const windText = (m) => {
+    if (m.wspd == null) return "—";
+    if (m.wspd === 0) return "Calm";
+    const dir = m.wdir === "VRB" || m.wdir == null ? "Variable" : `${String(m.wdir).padStart(3, "0")}°`;
+    return `${dir} ${m.wspd} kt${m.wgst ? `, gusts ${m.wgst}` : ""}`;
+  };
+  const cloudText = (m) => {
+    const c = Array.isArray(m.clouds) ? m.clouds : [];
+    if (!c.length) return m.cover === "CAVOK" ? "CAVOK" : m.cover === "CLR" || m.cover === "SKC" ? "Clear" : "No cloud reported";
+    return c.map((l) => (l.base != null ? `${l.cover} ${l.base.toLocaleString("en-NZ")} ft` : l.cover)).join(", ");
+  };
+
+  function apPopupHtml(ap) {
+    const m = ap.metar;
+    const fc = m && FLT_CAT[m.fltCat];
+    const rows = m ? [
+      ["Observed", `${nzTime(m.obsTime)} (${agoText(m.obsTime)})`],
+      ["Wind", windText(m)],
+      ["Visibility", kmFromSM(m.visib)],
+      ["Cloud", cloudText(m)],
+      ...(m.wxString ? [["Weather", m.wxString]] : []),
+      ["Temp / dew", m.temp != null ? `${m.temp}°C / ${m.dewp ?? "—"}°C` : "—"],
+      ["QNH", m.altim != null ? `${Math.round(m.altim)} hPa` : "—"],
+    ] : [];
+    return `<div class="ap-pop">
+      <h3>${esc(ap.icao)}${fc ? `<span class="fc" style="background:${fc.color}" title="${esc(fc.text)}">${esc(m.fltCat)}</span>` : ""}</h3>
+      <div class="sub">${esc(ap.name)}</div>
+      ${m ? `<dl>${rows.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join("")}</dl>
+        <div class="lbl">METAR</div><pre>${esc(m.raw)}</pre>` : `<p>No recent report.</p>`}
+      ${ap.taf ? `<div class="lbl">TAF · issued ${esc(nzTime(ap.taf.issueTime))}</div><pre>${esc(ap.taf.raw)}</pre>` : ""}
+    </div>`;
+  }
+
+  function apIcon(ap) {
+    const m = ap.metar;
+    const color = m && FLT_CAT[m.fltCat] ? FLT_CAT[m.fltCat].color : "#8A9AAA";
+    const wind = m && m.wspd != null ? (m.wspd === 0 ? "calm" : `${m.wdir === "VRB" ? "VRB" : String(m.wdir).padStart(3, "0")}/${m.wspd}${m.wgst ? "G" + m.wgst : ""}`) : "";
+    return L.divIcon({
+      className: "ap-icon",
+      html: `<span class="ap-pill"><i style="background:${color}"></i>${esc(ap.icao)}${wind ? ` <small>${esc(wind)}</small>` : ""}</span>`,
+      iconSize: [0, 0],
+    });
+  }
+
+  async function loadAirports() {
+    try {
+      const res = await fetch("api/airports", { cache: "no-store" });
+      if (!res.ok) throw new Error(`Feed server returned HTTP ${res.status}`);
+      const data = await res.json();
+      if (data.error && !data.airports.length) throw new Error(data.error);
+      const seen = new Set();
+      for (const ap of data.airports) {
+        seen.add(ap.icao);
+        let mk = apMarkers.get(ap.icao);
+        if (!mk) {
+          mk = L.marker([ap.lat, ap.lon], { pane: "airports", keyboard: true, title: ap.name })
+            .bindPopup("", { maxWidth: 320, autoPanPaddingTopLeft: [10, 60] })
+            .on("popupopen", () => { apOpenIcao = ap.icao; })
+            .on("popupclose", () => { if (apOpenIcao === ap.icao) apOpenIcao = null; })
+            .addTo(apLayer);
+          apMarkers.set(ap.icao, mk);
+        }
+        mk.setIcon(apIcon(ap));
+        mk.setPopupContent(apPopupHtml(ap));
+      }
+      for (const [icao, mk] of apMarkers) {
+        if (!seen.has(icao)) { apLayer.removeLayer(mk); apMarkers.delete(icao); }
+      }
+      apMeta.textContent = data.airports.length
+        ? `${data.airports.length} airports report internationally · updated ${nzTime(data.fetchedAt)}`
+        : "No reports available right now";
+    } catch (e) {
+      apMeta.innerHTML = `<span class="wind-err">${esc(e.name === "TypeError" ? "Can't reach the feed server" : e.message)}</span>`;
+    }
+  }
+
+  function setAirports(on) {
+    apOn = on;
+    apToggle.checked = on;
+    apSec.classList.toggle("on", on);
+    try { localStorage.setItem("nzskies-airports", on ? "1" : "0"); } catch {}
+    clearInterval(apTimer);
+    if (!on) {
+      map.removeLayer(apLayer);
+      map.attributionControl.removeAttribution(AP_ATTRIB);
+      return;
+    }
+    apLayer.addTo(map);
+    map.attributionControl.addAttribution(AP_ATTRIB);
+    apMeta.textContent = "Loading reports…";
+    loadAirports();
+    apTimer = setInterval(loadAirports, 5 * 60 * 1000);
+  }
+  apToggle.addEventListener("change", () => setAirports(apToggle.checked));
+  if (apOn) setAirports(true);
 
   // Keep the forecast hour current, and refresh the data when it gets old
   setInterval(async () => {
