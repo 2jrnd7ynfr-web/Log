@@ -59,9 +59,11 @@ that spot.
 
 Wind data comes from [Open-Meteo](https://open-meteo.com/) (free, no key, CC BY 4.0). The
 browser fetches it directly rather than `server.js`, because Open-Meteo's free allowance
-(10,000 calls a day) is counted per IP address and hosting providers share IPs between
-customers. A load fetches a ~390-point grid and is cached in the browser for 3 hours.
-The data is only fetched while the layer is switched on.
+(10,000 calls a day, 600 a minute) is counted per IP address and hosting providers share
+IPs between customers. The grid follows the map: up to ~300 points over the view, finer
+when zoomed in, cached in the browser for 3 hours, and fetched at most twice a minute,
+so after a big pan it can take up to 35 s for the new area to fill in. Nothing is
+fetched while the layer is off.
 
 ## Run it
 
