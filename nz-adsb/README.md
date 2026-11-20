@@ -10,6 +10,27 @@ and a link to it on globe.adsb.fi. Emergency squawks (7500/7600/7700) are flagge
 sorted to the top. Positions are dead-reckoned between updates so movement looks smooth.
 Works on phones, and has light and dark themes.
 
+## Coverage: NZ first, plus Australia and the Pacific
+
+The map opens on New Zealand. The **NZ / Australia / Pacific** buttons (top left) jump
+between areas, and you can pan anywhere from Western Australia to Fiji. The aircraft list
+and count show what's in view.
+
+adsb.fi only answers "aircraft within 250 nm of a point", at most once a second, so the
+region is covered by 34 overlapping circles (4 for NZ, 30 for Australia and the islands,
+placed near airports so empty ocean isn't polled). The server only polls the circles
+someone is looking at, and polls those near the middle of a view about seven times as
+often as ones at its edges. In practice:
+
+- The NZ view refreshes every few seconds, as before.
+- Wider views refresh more slowly (all of Australia: roughly every 30-40 s). The header
+  shows "~N s updates" when it's 8 s or more, and aircraft keep moving smoothly in between.
+- All viewers share the one-request-a-second budget, so several people looking at
+  different areas slows things for everyone.
+- **Pacific coverage is thin.** adsb.fi depends on volunteer receivers, and at the time of
+  writing it has almost nothing around Fiji, Vanuatu, Norfolk Island or Tonga. The circles
+  are there, so aircraft appear if receivers come online.
+
 ## Layers
 
 The **Layers** panel at the top right of the map (collapsed by default on phones) has:
@@ -18,9 +39,11 @@ The **Layers** panel at the top right of the map (collapsed by default on phones
   (VFR / MVFR / IFR / LIFR) and labelled with the wind. Click one for the decoded report,
   the raw METAR and the TAF. Data comes from NOAA's Aviation Weather Center through
   `server.js` (`/api/airports`, cached 10 minutes), because aviationweather.gov doesn't
-  allow browser requests. It only has the airports NZ shares internationally: Auckland,
-  Hamilton, Ohakea, Wellington, Christchurch, Queenstown and Dunedin. The smaller NZ
-  stations are only published by MetService, which needs a login or a paid key.
+  allow browser requests. It covers about 80 airports across the region, but only the
+  ones each country shares internationally: for NZ that's Auckland, Hamilton, Ohakea,
+  Wellington, Christchurch, Queenstown and Dunedin. The smaller NZ stations are only
+  published by MetService, which needs a login or a paid key. Zoomed out, airports
+  show as dots; zoom in for codes and winds.
 - **Rain radar**: the last two hours of radar in 10-minute frames from
   [RainViewer](https://www.rainviewer.com/), with play/pause and a time slider. The browser
   fetches it directly. RainViewer's free tier stops at zoom 7, so closer in, the zoom-7 images

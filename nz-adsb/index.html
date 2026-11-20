@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>NZ Skies Live</title>
-<meta name="description" content="Live ADS-B aircraft over New Zealand, from the adsb.fi open data feed.">
+<meta name="description" content="Live ADS-B aircraft over New Zealand, Australia and the south-west Pacific, from the adsb.fi open data feed.">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
 <style>
@@ -97,6 +97,8 @@
     margin-left: auto;
     align-items: center;
     white-space: nowrap;
+    min-width: 0;
+    overflow: hidden;
   }
   .stats b { color: var(--ink); font-weight: 600; }
   .dot {
@@ -284,6 +286,7 @@
   }
   .ap-pill i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; border: 1px solid rgba(0,0,0,.25); }
   .ap-pill small { font-weight: 400; color: var(--muted); }
+  .ap-pill.dot-only { padding: 2px; border-radius: 50%; transform: translate(-50%, -50%); }
   .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: var(--surface); color: var(--ink); box-shadow: var(--shadow); }
   .leaflet-popup-content { margin: 12px 14px; font-size: 13px; line-height: 1.4; width: 280px !important; max-width: calc(100vw - 80px); }
   .leaflet-container a.leaflet-popup-close-button { color: var(--muted); }
@@ -327,6 +330,18 @@
   .leaflet-control-attribution { background: color-mix(in srgb, var(--surface) 85%, transparent) !important; color: var(--muted); }
   .leaflet-control-attribution a { color: var(--accent); }
 
+  .jump-ctl {
+    display: flex; background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+    box-shadow: var(--shadow); overflow: hidden;
+  }
+  .jump-ctl button {
+    border: none; background: none; color: var(--ink); font: inherit; font-size: 12px; font-weight: 600;
+    padding: 6px 10px; cursor: pointer; border-right: 1px solid var(--line);
+  }
+  .jump-ctl button:last-child { border-right: none; }
+  .jump-ctl button:hover { background: var(--surface-2); }
+  .jump-ctl button.on { background: var(--accent-soft); color: var(--accent); }
+
   .sheet-toggle { display: none; }
 
   @media (max-width: 760px) {
@@ -361,7 +376,7 @@
 <header>
   <h1>NZ Skies <span>Live</span></h1>
   <div class="stats">
-    <span><span class="dot" id="statusDot"></span><span id="statusText">Connecting…</span></span>
+    <span><span class="dot" id="statusDot"></span><span id="statusText">Connecting…</span><span class="hide-sm" id="cycleText"></span></span>
     <span><b id="count">0</b> aircraft</span>
     <span class="hide-sm">updated <b id="updated">—</b></span>
   </div>
@@ -398,9 +413,17 @@
   // (adsb.fi has no CORS headers, so the browser can't call it directly).
   const FEED_URL = "api/aircraft";
   const POLL_MS = 2000;
-  const STALE_S = 60;          // drop aircraft not heard from in this long
+  const STALE_S = 90;          // drop aircraft not heard from in this long
+  // NZ is the home view; the map also covers Australia and the Pacific out to Fiji.
+  // Longitudes east of 180° (eastern Fiji) continue past 180 so the region is continuous.
   const NZ_BOUNDS = L.latLngBounds([-48.5, 164.5], [-33.0, 179.9]);
-  const MAX_BOUNDS = L.latLngBounds([-53, 158], [-29, 185]);
+  const VIEWS = {
+    NZ: NZ_BOUNDS,
+    Australia: L.latLngBounds([-44, 112], [-10, 154]),
+    Pacific: L.latLngBounds([-30, 158], [-12, 182]),
+  };
+  const REGION_BOUNDS = L.latLngBounds([-50, 108], [-7, 184]);
+  const MAX_BOUNDS = REGION_BOUNDS.pad(0.08);
   const TRAIL_MAX = 400;
 
   // ---------- State ----------
@@ -421,7 +444,7 @@
   // ---------- Map ----------
   const map = L.map("map", {
     zoomControl: true,
-    minZoom: 5,
+    minZoom: 3,
     maxBounds: MAX_BOUNDS,
     maxBoundsViscosity: 0.8,
     worldCopyJump: false,
@@ -463,6 +486,38 @@
   }
 
   // Legend
+  // Quick jumps between NZ (home), Australia and the Pacific islands
+  const jump = L.control({ position: "topleft" });
+  jump.onAdd = () => {
+    const d = L.DomUtil.create("div", "jump-ctl");
+    d.innerHTML = Object.keys(VIEWS).map((k) => `<button data-view="${k}">${k}</button>`).join("");
+    L.DomEvent.disableClickPropagation(d);
+    d.addEventListener("click", (e) => {
+      const k = e.target.dataset && e.target.dataset.view;
+      if (k) map.flyToBounds(VIEWS[k], { duration: 0.8 });
+    });
+    return d;
+  };
+  jump.addTo(map);
+  // Highlight the button for the area the map is mostly showing
+  function syncJump() {
+    const c = map.getCenter();
+    const z = map.getZoom();
+    let cur = null;
+    for (const [k, b] of Object.entries(VIEWS)) if (b.pad(0.1).contains(c)) { cur = k; break; }
+    if (z < 4) cur = null; // zoomed right out: no single area
+    document.querySelectorAll(".jump-ctl button").forEach((b) => b.classList.toggle("on", b.dataset.view === cur));
+  }
+  map.on("moveend", () => { syncJump(); renderList(); render(); });
+  syncJump();
+  // The map is created before the page finishes laying out (fonts, the list panel),
+  // so re-measure and re-centre on NZ once it has, unless the viewer has already moved it
+  const homeCenter = map.getCenter();
+  window.addEventListener("load", () => {
+    map.invalidateSize({ animate: false });
+    if (map.getCenter().equals(homeCenter)) map.fitBounds(NZ_BOUNDS, { animate: false });
+  });
+
   const legend = L.control({ position: "bottomleft" });
   legend.onAdd = () => {
     const d = L.DomUtil.create("div", "legend");
@@ -540,7 +595,7 @@
       if (prev && prev.posTime >= posTime) continue; // already have newer from another region
 
       const ac = prev || { hex: raw.hex, trail: [], marker: null, iconKey: "" };
-      ac.flight = (raw.flight || "").trim();
+      ac.flight = (raw.flight || "").replace(/@/g, "").trim(); // "@" pads unset callsigns
       ac.r = raw.r || "";
       ac.t = raw.t || "";
       ac.desc = raw.desc || "";
@@ -575,10 +630,14 @@
   let clockOffset = 0;
   const nowS = () => Date.now() / 1000 + clockOffset;
 
+  let cycleSeconds = 0; // how long the server takes to refresh everything in view
   async function pollLoop() {
     let wait = POLL_MS;
     try {
-      const res = await fetch(FEED_URL, { cache: "no-store" });
+      // Ask for the visible area (plus a margin); the server polls only those circles
+      const b = map.getBounds().pad(0.1);
+      const box = [b.getSouth(), b.getWest(), b.getNorth(), b.getEast()].map((v) => v.toFixed(2)).join(",");
+      const res = await fetch(`${FEED_URL}?box=${box}`, { cache: "no-store" });
       if (!res.ok) throw new Error(`Feed server returned HTTP ${res.status}`);
       const data = await res.json();
       if (!data.ok) {
@@ -588,6 +647,7 @@
         const now = data.now;
         clockOffset = now - Date.now() / 1000;
         ingest(data.aircraft || [], now);
+        cycleSeconds = data.cycleSeconds || 0;
         if (!document.querySelector("#list .row")) renderList(); // don't wait for the 3 s refresh
         lastOk = data.lastOkAt || Date.now();
         failStreak = 0;
@@ -607,6 +667,9 @@
     const banner = document.getElementById("banner");
     dot.className = "dot " + (ok ? "ok" : "err");
     txt.textContent = ok ? "Live" : "Offline";
+    const cyc = document.getElementById("cycleText");
+    cyc.textContent = ok && cycleSeconds >= 8 ? ` · ~${cycleSeconds} s updates` : "";
+    cyc.title = cyc.textContent ? "Wide views cover more of adsb.fi's 250 nm circles, which are fetched one per second" : "";
     if (ok) { banner.classList.remove("show"); return; }
     const msg = err && err.name === "TypeError"
       ? "Can't reach the feed server. Is server.js running? Retrying…"
@@ -618,7 +681,7 @@
   // ---------- Rendering ----------
   function projected(ac, t) {
     // Dead-reckon from the last position report, capped so stale targets don't drift far
-    const dt = Math.min(Math.max(t - ac.posTime, 0), 20);
+    const dt = Math.min(Math.max(t - ac.posTime, 0), Math.max(20, cycleSeconds + 10));
     if (ac.alt === "ground" || typeof ac.gs !== "number" || typeof ac.track !== "number" || dt <= 0) {
       return [ac.lat, ac.lon];
     }
@@ -629,8 +692,8 @@
     return [ac.lat + dLat, ac.lon + dLon];
   }
 
-  function inNZ(ac) {
-    return NZ_BOUNDS.pad(0.05).contains([ac.lat, ac.lon]);
+  function inRegion(ac) {
+    return REGION_BOUNDS.pad(0.05).contains([ac.lat, ac.lon]);
   }
 
   let trailLine = null;
@@ -651,7 +714,7 @@
   function render() {
     const t = nowS();
     for (const [hex, ac] of aircraft) {
-      if (t - ac.lastSeen > STALE_S || !inNZ(ac)) {
+      if (t - ac.lastSeen > STALE_S || !inRegion(ac)) {
         if (ac.marker) planeLayer.removeLayer(ac.marker);
         aircraft.delete(hex);
         if (selected === hex) select(null);
@@ -682,7 +745,10 @@
         ac.marker.unbindTooltip();
       }
     }
-    document.getElementById("count").textContent = aircraft.size;
+    const view = map.getBounds();
+    let inView = 0;
+    for (const ac of aircraft.values()) if (view.contains([ac.lat, ac.lon])) inView++;
+    document.getElementById("count").textContent = inView;
     document.getElementById("updated").textContent = lastOk
       ? new Date(lastOk).toLocaleTimeString("en-NZ", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
       : "—";
@@ -696,7 +762,9 @@
 
   function renderList() {
     const q = searchEl.value.trim().toLowerCase();
-    let rows = [...aircraft.values()];
+    // The list follows the map: aircraft in view (plus the selected one)
+    const view = map.getBounds();
+    let rows = [...aircraft.values()].filter((ac) => ac.hex === selected || view.contains([ac.lat, ac.lon]));
     if (q) {
       rows = rows.filter((ac) =>
         [ac.flight, ac.r, ac.t, ac.desc, ac.hex, ac.squawk, ac.op].some((v) => v && v.toLowerCase().includes(q)));
@@ -712,7 +780,7 @@
       return callsign(a).localeCompare(callsign(b));
     });
     if (!rows.length) {
-      listEl.innerHTML = `<div class="empty">${aircraft.size ? "No aircraft match that search." : lastOk ? "No aircraft over New Zealand right now." : "Waiting for the first update from adsb.fi…"}</div>`;
+      listEl.innerHTML = `<div class="empty">${q && aircraft.size ? "No aircraft in view match that search." : lastOk ? "No aircraft in view right now." : "Waiting for the first update from adsb.fi…"}</div>`;
       return;
     }
     const scroll = listEl.scrollTop;
@@ -844,13 +912,53 @@
     "500hPa": { label: "~18,000 ft", detail: "500 hPa",           speedScale: 0.035 },
     "250hPa": { label: "~34,000 ft", detail: "250 hPa",           speedScale: 0.025 },
   };
-  // ~390 grid points; each counts as one call against the viewer's own free
-  // Open-Meteo allowance (10,000/day per IP), so data is cached for 3 hours.
-  const WIND_STEP = 1.5;
-  const WIND_LATS = [], WIND_LONS = [];
-  for (let la = -28; la >= -52 - 1e-9; la -= WIND_STEP) WIND_LATS.push(+la.toFixed(2));
-  for (let lo = 152; lo <= 186 + 1e-9; lo += WIND_STEP) WIND_LONS.push(+lo.toFixed(2));
-  const WIND_CACHE_KEY = "nzskies-wind-v2";
+  // The grid follows the map view: at most WIND_MAX_POINTS points over the visible
+  // area plus a margin, finer when zoomed in. Each point counts as one call against
+  // the viewer's own free Open-Meteo allowance (10,000/day per IP), so grids are
+  // cached for 3 hours and only refetched when the view leaves the loaded grid.
+  // Open-Meteo also limits each IP to 600 calls a minute, hence the small grid
+  // (~250-300 points once snapped) and a gap between fetches: at most two a minute.
+  const WIND_MAX_POINTS = 250;
+  const WIND_MIN_GAP_MS = 35 * 1000;
+  let windLastFetchAt = 0;
+  const WIND_CACHE_KEY = "nzskies-wind-v3";
+  let WIND_STEP = 1.5, WIND_LATS = [], WIND_LONS = []; // grid of the loaded data
+  let windRetryAt = 0; // after an error, don't refetch on every pan
+  let windMoveTimer = null;
+
+  function clampedView(pad) {
+    const b = map.getBounds().pad(pad);
+    return {
+      s: Math.max(b.getSouth(), -60), n: Math.min(b.getNorth(), 5),
+      w: Math.max(b.getWest(), 95), e: Math.min(b.getEast(), 200),
+    };
+  }
+  function idealWindGrid() {
+    const v = clampedView(0.15);
+    const step = Math.max(0.5, Math.ceil(Math.sqrt(((v.n - v.s) * (v.e - v.w)) / WIND_MAX_POINTS) * 2) / 2);
+    const lat0 = Math.ceil(v.n / step) * step, lat1 = Math.floor(v.s / step) * step;
+    const lon0 = Math.floor(v.w / step) * step, lon1 = Math.ceil(v.e / step) * step;
+    const lats = [], lons = [];
+    for (let la = lat0; la >= lat1 - 1e-9; la -= step) lats.push(+la.toFixed(2));
+    for (let lo = lon0; lo <= lon1 + 1e-9; lo += step) lons.push(+lo.toFixed(2));
+    return { step, lats, lons };
+  }
+  // A loaded grid is good for the view if it covers it and isn't much coarser than ideal
+  function windGridFits(data) {
+    if (!data || !data.grid || Date.now() - data.fetchedAt > WIND_MAX_AGE_MS) return false;
+    const g = data.grid, v = clampedView(0);
+    const covers = v.n <= g.lats[0] + 1e-6 && v.s >= g.lats[g.lats.length - 1] - 1e-6 &&
+      v.w >= g.lons[0] - 1e-6 && v.e <= g.lons[g.lons.length - 1] + 1e-6;
+    return covers && g.step <= idealWindGrid().step * 2;
+  }
+  function useWindData(data) {
+    windData = data;
+    WIND_STEP = data.grid.step; WIND_LATS = data.grid.lats; WIND_LONS = data.grid.lons;
+  }
+  function readWindCache() {
+    try { const c = JSON.parse(localStorage.getItem(WIND_CACHE_KEY) || "[]"); return Array.isArray(c) ? c : []; }
+    catch { return []; }
+  }
   const WIND_MAX_AGE_MS = 3 * 3600 * 1000;
   const WIND_ATTRIB = 'Weather <a href="https://open-meteo.com/">Open-Meteo.com</a>';
 
@@ -880,18 +988,27 @@
   let windFetching = null;
   let windError = null;
 
-  async function loadWind(force = false) {
-    if (!force && windData && Date.now() - windData.fetchedAt < WIND_MAX_AGE_MS) return windData;
-    if (!force && !windData) {
-      try {
-        const c = JSON.parse(localStorage.getItem(WIND_CACHE_KEY) || "null");
-        if (c && Date.now() - c.fetchedAt < WIND_MAX_AGE_MS) { windData = c; return c; }
-      } catch {}
-    }
+  async function loadWind() {
+    if (windGridFits(windData)) return windData;
+    const hit = readWindCache().find(windGridFits);
+    if (hit) { useWindData(hit); return hit; }
     if (windFetching) return windFetching;
+    if (Date.now() < windRetryAt && windData) return windData;
+    const wait = windLastFetchAt + WIND_MIN_GAP_MS - Date.now();
+    if (wait > 0 && windData) {
+      // Too soon after the last fetch: keep the current grid and try again when allowed
+      clearTimeout(windMoveTimer);
+      windMoveTimer = setTimeout(() => { if (windLevel !== "off" && !windGridFits(windData)) refreshWind(); }, wait + 200);
+      return windData;
+    }
+    windLastFetchAt = Date.now();
+    const grid = idealWindGrid();
     windFetching = (async () => {
       const qLat = [], qLon = [];
-      for (const la of WIND_LATS) for (const lo of WIND_LONS) { qLat.push(la); qLon.push(lo > 180 ? +(lo - 360).toFixed(2) : lo); }
+      for (const la of grid.lats) for (const lo of grid.lons) {
+        qLat.push(la);
+        qLon.push(lo > 180 ? +(lo - 360).toFixed(2) : lo < -180 ? +(lo + 360).toFixed(2) : lo);
+      }
       const keys = Object.keys(WIND_LEVELS);
       const hourly = keys.flatMap((k) => [`wind_speed_${k}`, `wind_direction_${k}`]).join(",");
       const url = `https://api.open-meteo.com/v1/forecast?latitude=${qLat.join(",")}&longitude=${qLon.join(",")}` +
@@ -912,12 +1029,17 @@
           d: times.map((_, t) => pts.map((p) => p.hourly[`wind_direction_${k}`][t])),
         };
       }
-      const data = { fetchedAt: Date.now(), times, levels };
-      try { localStorage.setItem(WIND_CACHE_KEY, JSON.stringify(data)); } catch {}
-      windData = data;
+      const data = { fetchedAt: Date.now(), times, levels, grid: { step: grid.step, lats: grid.lats, lons: grid.lons } };
+      // Keep the last few grids so panning back and forth doesn't refetch
+      const keep = [data, ...readWindCache().filter((d) => d.grid && Date.now() - d.fetchedAt < WIND_MAX_AGE_MS)].slice(0, 3);
+      try { localStorage.setItem(WIND_CACHE_KEY, JSON.stringify(keep)); }
+      catch { try { localStorage.setItem(WIND_CACHE_KEY, JSON.stringify([data])); } catch {} }
+      useWindData(data);
       return data;
     })();
-    try { return await windFetching; } finally { windFetching = null; }
+    try { return await windFetching; }
+    catch (e) { windRetryAt = Date.now() + 2 * 60 * 1000; throw e; }
+    finally { windFetching = null; }
   }
 
   function buildWindField() {
@@ -1164,7 +1286,9 @@
       const t = new Date(windField.time * 1000).toLocaleString("en-NZ", {
         timeZone: "Pacific/Auckland", weekday: "short", hour: "numeric", minute: "2-digit",
       });
-      windMeta.textContent = `${WIND_LEVELS[windLevel].detail} · forecast for ${t} NZ time · knots`;
+      const pending = !windGridFits(windData);
+      windMeta.textContent = `${WIND_LEVELS[windLevel].detail} · forecast for ${t} NZ time · knots` +
+        (pending ? " · loading this area shortly…" : "");
     } else {
       windMeta.textContent = "";
     }
@@ -1192,6 +1316,11 @@
       return;
     }
     map.attributionControl.addAttribution(WIND_ATTRIB);
+    await refreshWind();
+  }
+  async function refreshWind() {
+    const level = windLevel;
+    const before = windData;
     windError = null;
     const loading = loadWind();
     updateWindMeta();
@@ -1200,11 +1329,16 @@
     } catch (e) {
       windError = e && e.name === "TypeError" ? "Couldn't reach Open-Meteo" : (e.message || "Wind data unavailable");
     }
-    if (windLevel !== level) return; // changed while loading
-    buildWindField();
-    redrawWind();
+    if (windLevel !== level || windLevel === "off") return; // changed while loading
+    if (windData !== before || !windField) { buildWindField(); redrawWind(); }
     updateWindMeta();
   }
+  // Load a grid for the new view once panning/zooming settles
+  map.on("moveend", () => {
+    if (windLevel === "off") return;
+    clearTimeout(windMoveTimer);
+    windMoveTimer = setTimeout(() => { if (!windGridFits(windData)) refreshWind(); else updateWindMeta(); }, 700);
+  });
   windSelect.addEventListener("change", () => setWindLevel(windSelect.value));
   setWindLevel(windLevel);
 
@@ -1408,7 +1542,9 @@
     const wind = m && m.wspd != null ? (m.wspd === 0 ? "calm" : `${m.wdir === "VRB" ? "VRB" : String(m.wdir).padStart(3, "0")}/${m.wspd}${m.wgst ? "G" + m.wgst : ""}`) : "";
     return L.divIcon({
       className: "ap-icon",
-      html: `<span class="ap-pill"><i style="background:${color}"></i>${esc(ap.icao)}${wind ? ` <small>${esc(wind)}</small>` : ""}</span>`,
+      html: map.getZoom() < 5
+        ? `<span class="ap-pill dot-only" title="${esc(ap.icao)}"><i style="background:${color}"></i></span>`
+        : `<span class="ap-pill"><i style="background:${color}"></i>${esc(ap.icao)}${wind ? ` <small>${esc(wind)}</small>` : ""}</span>`,
       iconSize: [0, 0],
     });
   }
@@ -1431,6 +1567,7 @@
             .addTo(apLayer);
           apMarkers.set(ap.icao, mk);
         }
+        mk._ap = ap;
         mk.setIcon(apIcon(ap));
         mk.setPopupContent(apPopupHtml(ap));
       }
@@ -1438,7 +1575,7 @@
         if (!seen.has(icao)) { apLayer.removeLayer(mk); apMarkers.delete(icao); }
       }
       apMeta.textContent = data.airports.length
-        ? `${data.airports.length} airports report internationally · updated ${nzTime(data.fetchedAt)}`
+        ? `${data.airports.length} airports · updated ${nzTime(data.fetchedAt)}`
         : "No reports available right now";
     } catch (e) {
       apMeta.innerHTML = `<span class="wind-err">${esc(e.name === "TypeError" ? "Can't reach the feed server" : e.message)}</span>`;
@@ -1462,6 +1599,13 @@
     loadAirports();
     apTimer = setInterval(loadAirports, 5 * 60 * 1000);
   }
+  let apZoomedOut = map.getZoom() < 5;
+  map.on("zoomend", () => {
+    const z = map.getZoom() < 5;
+    if (z === apZoomedOut) return;
+    apZoomedOut = z;
+    for (const mk of apMarkers.values()) if (mk._ap) mk.setIcon(apIcon(mk._ap));
+  });
   apToggle.addEventListener("change", () => setAirports(apToggle.checked));
   if (apOn) setAirports(true);
 
@@ -1469,9 +1613,10 @@
   setInterval(async () => {
     if (windLevel === "off") return;
     const before = windField && windField.time;
+    const dataBefore = windData;
     try { await loadWind(); windError = null; } catch {}
     buildWindField();
-    if (!windField || windField.time !== before) redrawWind();
+    if (!windField || windField.time !== before || windData !== dataBefore) redrawWind();
     updateWindMeta();
   }, 10 * 60 * 1000);
 

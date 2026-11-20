@@ -1,9 +1,11 @@
-// NZ Skies Live — tiny server that relays the adsb.fi open data feed for New Zealand.
+// NZ Skies Live — tiny server that relays the adsb.fi open data feed for New Zealand,
+// Australia and the south-west Pacific out to Fiji.
 //
 // opendata.adsb.fi doesn't send CORS headers, so browsers can't call it directly.
-// This server polls it (respecting the 1 request/second limit), merges the
-// overlapping regional queries into one NZ-wide snapshot, and serves that plus
-// the static page from the same origin.
+// It answers "aircraft within 250 nm of a point" at most once a second, so the
+// region is covered by overlapping circles and the server only polls the circles
+// someone is currently looking at (NZ by default). It merges the results and
+// serves them, plus the static page, from the same origin.
 //
 // Usage: node server.js            (Node 18+; no dependencies)
 //        PORT=8080 node server.js
@@ -16,29 +18,78 @@ const PORT = Number(process.env.PORT) || 8080;
 const API = "https://opendata.adsb.fi/api/v2";
 const RADIUS_NM = 250; // API maximum
 const REQUEST_GAP_MS = 1100; // adsb.fi asks for at most 1 request per second
-const IDLE_AFTER_MS = 2 * 60 * 1000; // stop polling when nobody is watching
+const WANTED_FOR_MS = 15 * 1000; // keep polling a circle this long after a viewer asked for it
+// Circles near the middle of someone's view are polled this many times as often as
+// ones only clipping its edges, so the area you're looking at stays fresh
+const EDGE_WEIGHT = 0.15;
+const DROP_AFTER_S = 120; // forget aircraft not reported for this long
 
-// Overlapping 250 nm circles that together cover the NZ mainland and surrounds
-const REGIONS = [
-  { name: "Northland / Auckland", lat: -36.2, lon: 174.6 },
-  { name: "Central North Island", lat: -39.4, lon: 176.0 },
-  { name: "Upper South Island", lat: -42.6, lon: 172.6 },
-  { name: "Lower South Island", lat: -45.6, lon: 169.4 },
+// Overlapping 250 nm circles. Longitudes run past 180 (Fiji) so the region is continuous.
+const NZ_CIRCLES = [
+  [-36.2, 174.6], // Northland / Auckland
+  [-39.4, 176.0], // Central North Island
+  [-42.6, 172.6], // Upper South Island
+  [-45.6, 169.4], // Lower South Island
 ];
+// Australia and the Pacific islands to Fiji: a honeycomb of circles, keeping only
+// those near an airport with a weather station (so empty ocean isn't polled).
+const OTHER_CIRCLES = [
+  [-10.0, 130.8], [-10.0, 137.8], [-16.0, 120.7], [-16.0, 127.8],
+  [-16.0, 134.9], [-16.0, 142.0], [-16.0, 170.4], [-17.0, 178.6],
+  [-22.0, 117.4], [-22.0, 124.7], [-22.0, 132.1], [-22.0, 139.5],
+  [-22.0, 146.8], [-22.0, 154.2], [-22.0, 161.6], [-22.0, 169.0],
+  [-28.0, 113.9], [-28.0, 121.6], [-28.0, 129.3], [-28.0, 137.1],
+  [-28.0, 144.8], [-28.0, 152.6], [-28.0, 160.3], [-28.0, 168.0],
+  [-34.0, 118.2], [-34.0, 134.7], [-34.0, 143.0], [-34.0, 151.2],
+  [-40.0, 141.2], [-40.0, 150.1],
+];
+const CIRCLES = [...NZ_CIRCLES, ...OTHER_CIRCLES].map(([lat, lon], i) => ({
+  i, lat, lon, wantedUntil: 0, coreUntil: 0, polledAt: 0, nz: i < NZ_CIRCLES.length,
+}));
 
-const regionData = REGIONS.map(() => ({ now: 0, aircraft: [] }));
-let regionIdx = 0;
-let lastClientAt = 0;
+const aircraftByHex = new Map(); // hex -> { ac, posTime, seenTime }
 let lastOkAt = 0;
 let lastError = null;
 let polling = false;
 
-async function pollOnce() {
-  const i = regionIdx;
-  regionIdx = (regionIdx + 1) % REGIONS.length;
-  const r = REGIONS[i];
-  const url = `${API}/lat/${r.lat}/lon/${r.lon}/dist/${RADIUS_NM}`;
-  const res = await fetch(url, {
+const toRad = (d) => (d * Math.PI) / 180;
+function distNm(lat1, lon1, lat2, lon2) {
+  const a = Math.sin(toRad(lat1)) * Math.sin(toRad(lat2)) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(toRad(lon1 - lon2));
+  return Math.acos(Math.min(1, Math.max(-1, a))) * 3440.065;
+}
+// Distance from a circle centre to the nearest point of a lat/lon box
+function distToBoxNm(c, box) {
+  const lat = Math.min(Math.max(c.lat, box.s), box.n);
+  const lon = Math.min(Math.max(c.lon, box.w), box.e);
+  return distNm(c.lat, c.lon, lat, lon);
+}
+const normLon = (lon) => (lon < 0 ? lon + 360 : lon);
+
+// The middle half of a box (a quarter trimmed from each side)
+function innerBox(box) {
+  const dLat = (box.n - box.s) / 4, dLon = (box.e - box.w) / 4;
+  return { s: box.s + dLat, n: box.n - dLat, w: box.w + dLon, e: box.e - dLon };
+}
+// Which circles a view needs, and which of those are near its middle
+function circlesFor(box) {
+  if (!box) return CIRCLES.filter((c) => c.nz).map((c) => ({ c, core: true }));
+  const inner = innerBox(box);
+  return CIRCLES.filter((c) => distToBoxNm(c, box) < RADIUS_NM)
+    .map((c) => ({ c, core: distToBoxNm(c, inner) < RADIUS_NM }));
+}
+
+function markWanted(box) {
+  const until = Date.now() + WANTED_FOR_MS;
+  for (const { c, core } of circlesFor(box)) {
+    c.wantedUntil = until;
+    if (core) c.coreUntil = until;
+  }
+}
+
+async function pollCircle(c) {
+  const lon = c.lon > 180 ? +(c.lon - 360).toFixed(2) : c.lon;
+  const res = await fetch(`${API}/lat/${c.lat}/lon/${lon}/dist/${RADIUS_NM}`, {
     headers: { "User-Agent": "nz-skies-live/1.0", Accept: "application/json" },
     signal: AbortSignal.timeout(10000),
   });
@@ -50,72 +101,101 @@ async function pollOnce() {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
   const now = typeof data.now === "number" ? (data.now > 1e11 ? data.now / 1000 : data.now) : Date.now() / 1000;
-  regionData[i] = { now, aircraft: data.aircraft || data.ac || [] };
+  for (const ac of data.aircraft || data.ac || []) {
+    if (typeof ac.lat !== "number" || typeof ac.lon !== "number") continue;
+    // The same aircraft appears in overlapping circles; keep the freshest position
+    const posTime = now - (ac.seen_pos ?? ac.seen ?? 0);
+    const prev = aircraftByHex.get(ac.hex);
+    if (prev && prev.posTime >= posTime) continue;
+    const { dst, dir, ...rest } = ac;
+    aircraftByHex.set(ac.hex, { ac: { ...rest, lon: normLon(ac.lon) }, posTime, seenTime: now - (ac.seen ?? 0) });
+  }
+  c.polledAt = Date.now();
   lastOkAt = Date.now();
   lastError = null;
 }
 
 async function loop() {
-  if (Date.now() - lastClientAt > IDLE_AFTER_MS) {
+  const now = Date.now();
+  // Poll the wanted circle that is most overdue (edge circles count as less urgent);
+  // stop when nobody is watching
+  const wanted = CIRCLES.filter((c) => c.wantedUntil > now);
+  if (!wanted.length) {
     polling = false;
     return;
   }
+  const urgency = (c) => (now - c.polledAt) * (c.coreUntil > now ? 1 : EDGE_WEIGHT);
+  wanted.sort((a, b) => urgency(b) - urgency(a));
   let wait = REQUEST_GAP_MS;
   try {
-    await pollOnce();
+    await pollCircle(wanted[0]);
   } catch (e) {
     lastError = e.message;
     wait = e.backoff || 3000;
     console.warn(`[adsb.fi] ${e.message}`);
   }
+  const cutoff = Date.now() / 1000 - DROP_AFTER_S;
+  for (const [hex, a] of aircraftByHex) if (a.seenTime < cutoff) aircraftByHex.delete(hex);
   setTimeout(loop, wait);
 }
 
-function ensurePolling() {
-  lastClientAt = Date.now();
+function ensurePolling(box) {
+  markWanted(box);
   if (!polling) {
     polling = true;
     loop();
   }
 }
 
-// Merge regions: the same aircraft appears in overlapping circles; keep the
-// freshest position report, with times normalised to absolute epoch seconds.
-function snapshot() {
-  const byHex = new Map();
-  let newest = 0;
-  for (const { now, aircraft } of regionData) {
-    if (!now) continue;
-    newest = Math.max(newest, now);
-    for (const ac of aircraft) {
-      if (typeof ac.lat !== "number" || typeof ac.lon !== "number") continue;
-      const posTime = now - (ac.seen_pos ?? ac.seen ?? 0);
-      const prev = byHex.get(ac.hex);
-      if (prev && prev._posTime >= posTime) continue;
-      byHex.set(ac.hex, { ...ac, _posTime: posTime, _seenTime: now - (ac.seen ?? 0) });
-    }
+// Aircraft inside the box (whole cache if no box), with times relative to "now"
+function snapshot(box) {
+  const now = Date.now() / 1000;
+  const aircraft = [];
+  for (const { ac, posTime, seenTime } of aircraftByHex.values()) {
+    if (box && (ac.lat < box.s || ac.lat > box.n || ac.lon < box.w || ac.lon > box.e)) continue;
+    aircraft.push({ ...ac, seen_pos: +(now - posTime).toFixed(1), seen: +(now - seenTime).toFixed(1) });
   }
-  const now = newest || Date.now() / 1000;
-  const aircraft = [...byHex.values()].map(({ _posTime, _seenTime, dst, dir, ...ac }) => ({
-    ...ac,
-    seen_pos: +(now - _posTime).toFixed(1),
-    seen: +(now - _seenTime).toFixed(1),
-  }));
-  return { now, aircraft, ok: !!lastOkAt, lastOkAt, error: lastError };
+  // Roughly how often the middle of the view refreshes, so the page can say so
+  // (each poll takes one slot; edge circles take a fraction of the slots)
+  const t = Date.now();
+  const load = CIRCLES.reduce((sum, c) => sum + (c.wantedUntil > t ? (c.coreUntil > t ? 1 : EDGE_WEIGHT) : 0), 0);
+  return {
+    now, aircraft, ok: !!lastOkAt, lastOkAt, error: lastError,
+    cycleSeconds: Math.max(1, Math.round(load * REQUEST_GAP_MS / 1000)),
+    circlesInView: circlesFor(box).length,
+  };
+}
+
+function parseBox(q) {
+  const v = (q || "").split(",").map(Number);
+  if (v.length !== 4 || v.some((x) => !Number.isFinite(x))) return null;
+  const [s, w, n, e] = v;
+  if (s >= n || w >= e) return null;
+  return { s, w, n, e };
 }
 
 // ---------- Airport weather (METAR/TAF from NOAA's Aviation Weather Center) ----------
 // aviationweather.gov sends no CORS headers, so the browser can't call it directly.
-// It only has the NZ airports that report internationally (the main ones), but
-// asking for every NZ aerodrome with a weather station means any that appear are shown.
-// (A bounding-box query misses some NZ airports and picks up Norfolk Island.)
+// It only has the airports each country shares internationally (for NZ, the main
+// ones). Bounding-box queries return an incomplete set, so every aerodrome with a
+// weather station in the region is asked for by code; whichever report are shown.
 const AWC = "https://aviationweather.gov/api/data";
-const NZ_IDS = [
-  "NZAA", "NZAP", "NZAR", "NZAS", "NZCH", "NZCI", "NZCX", "NZDA", "NZDN", "NZFX", "NZGB", "NZGM",
-  "NZGS", "NZHK", "NZHN", "NZKI", "NZKK", "NZKO", "NZKT", "NZLX", "NZMA", "NZMC", "NZMF", "NZMO",
-  "NZMS", "NZNP", "NZNR", "NZNS", "NZNV", "NZOH", "NZOU", "NZPM", "NZPP", "NZQN", "NZRA", "NZRC",
-  "NZRO", "NZRT", "NZTG", "NZTH", "NZTK", "NZTL", "NZTU", "NZUK", "NZWB", "NZWF", "NZWK", "NZWL",
-  "NZWN", "NZWO", "NZWP", "NZWR", "NZWS", "NZWT", "NZWU",
+const STATION_IDS = [
+  "NFFN", "NFKD", "NFLB", "NFNA", "NFNK", "NFNL", "NFNM", "NFNR", "NFNS", "NFVB", "NLWF", "NVSC",
+  "NVSG", "NVSL", "NVSP", "NVSS", "NVVA", "NVVV", "NVVW", "NWWD", "NWWE", "NWWK", "NWWL", "NWWM",
+  "NWWN", "NWWR", "NWWU", "NWWV", "NWWW", "NZAA", "NZCH", "NZDN", "NZGS", "NZHK", "NZHN", "NZKI",
+  "NZNP", "NZNV", "NZOH", "NZPP", "NZQN", "NZRO", "NZTG", "NZWN", "NZWP", "YABA", "YAMB", "YARG",
+  "YAYE", "YAYT", "YBAF", "YBAS", "YBBN", "YBCG", "YBCS", "YBCV", "YBDV", "YBGL", "YBHI", "YBHM",
+  "YBLN", "YBMA", "YBMK", "YBNA", "YBOK", "YBPN", "YBRK", "YBRM", "YBSU", "YBTL", "YBUD", "YBWP",
+  "YBWW", "YBWX", "YCAR", "YCAS", "YCBA", "YCBB", "YCBP", "YCCY", "YCDU", "YCFS", "YCIN", "YCNM",
+  "YCOM", "YDBY", "YDGV", "YDPO", "YDTC", "YDYL", "YEML", "YESP", "YFLI", "YFRT", "YGEL", "YGFN",
+  "YGLA", "YGTE", "YGTH", "YHBA", "YHID", "YHUG", "YKRY", "YKSC", "YLEC", "YLHI", "YLIS", "YLRE",
+  "YMAV", "YMAY", "YMDG", "YMEK", "YMEN", "YMER", "YMES", "YMHB", "YMIA", "YMLT", "YMLV", "YMMB",
+  "YMMI", "YMML", "YMNG", "YMOR", "YMTG", "YMWY", "YNAR", "YNBR", "YNTN", "YNWN", "YOLD", "YPAD",
+  "YPAL", "YPBH", "YPBO", "YPCD", "YPDB", "YPDN", "YPEA", "YPED", "YPFT", "YPGN", "YPGV", "YPJT",
+  "YPKA", "YPKG", "YPKU", "YPLM", "YPMQ", "YPMR", "YPPD", "YPPF", "YPPH", "YPTN", "YPWR", "YRMD",
+  "YSBK", "YSCB", "YSCM", "YSCN", "YSDU", "YSNF", "YSNW", "YSRI", "YSSY", "YSTW", "YSWG", "YSWM",
+  "YSWS", "YTEF", "YTMU", "YTNK", "YTRE", "YWGT", "YWHA", "YWLM", "YWLP",
 ].join(",");
 const AIRPORT_TTL_MS = 10 * 60 * 1000;
 let airportCache = { fetchedAt: 0, airports: [], error: null };
@@ -133,8 +213,8 @@ async function awc(endpoint) {
 
 async function fetchAirports() {
   const [metars, tafs] = await Promise.all([
-    awc(`metar?ids=${NZ_IDS}&format=json&hours=3`),
-    awc(`taf?ids=${NZ_IDS}&format=json`).catch(() => []),
+    awc(`metar?ids=${STATION_IDS}&format=json&hours=3`),
+    awc(`taf?ids=${STATION_IDS}&format=json`).catch(() => []),
   ]);
   // Several hours are requested so hourly reporters are included; keep the newest per airport
   const latest = new Map();
@@ -148,19 +228,19 @@ async function fetchAirports() {
     if (!prev || t.issueTime > prev.issueTime) tafBy.set(t.icaoId, t);
   }
   const toUnix = (v) => (typeof v === "number" ? v : Math.floor(Date.parse(v) / 1000));
-  const cleanName = (n) => String(n || "").replace(/,\s*[A-Z]{2,3},\s*NZ$/, "").replace(/\bIntl\b/, "International").replace(/\bArpt\b/, "Airport");
+  const cleanName = (n) => String(n || "").replace(/,\s*[A-Z]{2,3},\s*[A-Z]{2}$/, "").replace(/\bIntl\b/, "International").replace(/\bArpt\b/, "Airport");
   const ids = new Set([...latest.keys(), ...tafBy.keys()]);
   return [...ids].sort().flatMap((icao) => {
     const m = latest.get(icao);
     const t = tafBy.get(icao);
     const base = m || t;
     // NZ codes also cover Antarctic fields (e.g. NZFX McMurdo), which are off this map
-    if (!(base.lat > -53 && base.lat < -28)) return [];
+    if (!(base.lat > -53 && base.lat < -5)) return [];
     return [{
       icao,
       name: cleanName(base.name),
       lat: base.lat,
-      lon: base.lon,
+      lon: normLon(base.lon), // east of 180° (eastern Fiji) continues past 180
       metar: m ? {
         raw: m.rawOb, obsTime: toUnix(m.obsTime), fltCat: m.fltCat || null,
         wdir: m.wdir, wspd: m.wspd, wgst: m.wgst, visib: m.visib,
@@ -213,8 +293,10 @@ http
       });
     }
     if (url.pathname === "/api/aircraft") {
-      ensurePolling();
-      const body = JSON.stringify(snapshot());
+      // ?box=south,west,north,east (longitudes may run past 180); without it, NZ
+      const box = parseBox(url.searchParams.get("box"));
+      ensurePolling(box);
+      const body = JSON.stringify(snapshot(box));
       res.writeHead(200, {
         "Content-Type": "application/json",
         "Cache-Control": "no-store",
