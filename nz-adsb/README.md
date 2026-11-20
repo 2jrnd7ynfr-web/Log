@@ -10,6 +10,20 @@ and a link to it on globe.adsb.fi. Emergency squawks (7500/7600/7700) are flagge
 sorted to the top. Positions are dead-reckoned between updates so movement looks smooth.
 Works on phones, and has light and dark themes.
 
+## Hover card (desktop)
+
+On a computer, point at any aircraft for a large card with the flight number as
+passengers know it (ANZ555 → **NZ 555**, with the airline), the aircraft type and
+registration, the route (**AKL → CHC**, with city names), altitude with a climb/descent
+arrow, and speed in knots and km/h. Touch screens keep tap-for-details instead.
+
+ADS-B doesn't broadcast routes, so they're looked up by callsign in
+[hexdb.io](https://hexdb.io)'s free community database through `server.js`
+(`/api/route`, cached 6 hours, shared by all viewers). It doesn't know every flight,
+especially regional and private ones ("Route not available"), and flight numbers get
+reused, so a route is only shown if the aircraft is actually somewhere between the two
+airports. Private flights using their registration as a callsign show "No published route".
+
 ## Coverage: NZ first, plus Australia and the Pacific
 
 The map opens on New Zealand. The **NZ / Australia / Pacific** buttons (top left) jump

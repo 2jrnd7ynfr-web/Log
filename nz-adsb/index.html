@@ -226,6 +226,35 @@
   .banner.show { display: block; }
   .map-wrap { position: relative; min-height: 0; display: grid; }
 
+  /* Hover card (desktop) */
+  .hover-card {
+    position: absolute; left: 0; top: 0; z-index: 950; pointer-events: none;
+    width: 270px; background: var(--surface); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 12px;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28);
+    font-family: var(--sans); overflow: hidden;
+  }
+  .hover-card[hidden] { display: none; }
+  .hc-top { padding: 12px 14px 10px; border-left: 6px solid; }
+  .hc-flight { font-size: 24px; font-weight: 700; letter-spacing: -0.01em; line-height: 1.1; }
+  .hc-airline { font-size: 15px; font-weight: 600; margin-top: 3px; }
+  .hc-type { font-size: 14px; color: var(--muted); margin-top: 2px; }
+  .hc-route {
+    display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 8px;
+    padding: 10px 14px; border-top: 1px solid var(--line); background: var(--surface-2);
+  }
+  .hc-route > div:last-child { text-align: right; }
+  .hc-route b { display: block; font-size: 22px; font-weight: 700; line-height: 1.1; }
+  .hc-route span { display: block; font-size: 14px; color: var(--muted); }
+  .hc-arrow { font-size: 22px; color: var(--muted); }
+  .hc-route-none { padding: 10px 14px; border-top: 1px solid var(--line); background: var(--surface-2); font-size: 15px; color: var(--muted); }
+  .hc-stats { display: grid; grid-template-columns: 1fr 1fr; border-top: 1px solid var(--line); }
+  .hc-stats > div { padding: 9px 14px; }
+  .hc-stats > div + div { border-left: 1px solid var(--line); }
+  .hc-stats span { display: block; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+  .hc-stats b { display: block; font-size: 18px; font-weight: 600; margin-top: 1px; white-space: nowrap; }
+  .hc-stats small { font-size: 13px; font-weight: 400; color: var(--muted); }
+
   /* Wind layer control */
   .wind-ctl {
     background: var(--surface);
@@ -388,6 +417,7 @@
   <div class="map-wrap">
     <div id="map"></div>
     <div class="banner" id="banner"></div>
+    <div class="hover-card" id="hoverCard" hidden role="tooltip"></div>
   </div>
   <aside id="aside">
     <button class="sheet-toggle" id="sheetToggle">Hide list ▾</button>
@@ -717,6 +747,7 @@
       if (t - ac.lastSeen > STALE_S || !inRegion(ac)) {
         if (ac.marker) planeLayer.removeLayer(ac.marker);
         aircraft.delete(hex);
+        if (hoverHex === hex) hideHoverCard(true);
         if (selected === hex) select(null);
         continue;
       }
@@ -726,6 +757,8 @@
       if (!ac.marker) {
         ac.marker = L.marker(pos, { icon: makeIcon(ac, sel), zIndexOffset: sel ? 1000 : 0, keyboard: false })
           .on("click", () => select(hex))
+          .on("mouseover", () => showHoverCard(hex))
+          .on("mouseout", () => hideHoverCard())
           .addTo(planeLayer);
         ac.iconKey = key;
       } else {
@@ -745,6 +778,7 @@
         ac.marker.unbindTooltip();
       }
     }
+    if (hoverHex) updateHoverCard(); // live altitude/speed while pointing at it
     const view = map.getBounds();
     let inView = 0;
     for (const ac of aircraft.values()) if (view.contains([ac.lat, ac.lon])) inView++;
@@ -753,6 +787,140 @@
       ? new Date(lastOk).toLocaleTimeString("en-NZ", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
       : "—";
   }
+
+  // ---------- Hover card (desktop browsers only) ----------
+  // Pointing at an aircraft shows a large, easy-to-read card: flight number, airline,
+  // route, altitude and speed. Touch screens keep the tap-for-details panel instead.
+  const canHover = matchMedia("(hover: hover) and (pointer: fine)").matches;
+  const hoverCard = document.getElementById("hoverCard");
+  let hoverHex = null;
+  let hoverHideTimer = null;
+
+  // ICAO airline code -> [IATA code, name], for airlines common in the region.
+  // Callsigns use the ICAO code (ANZ558); people know the flight as NZ 558.
+  const AIRLINES = {
+    ANZ: ["NZ", "Air New Zealand"], QFA: ["QF", "Qantas"], QLK: ["QF", "QantasLink"],
+    JST: ["JQ", "Jetstar"], VOZ: ["VA", "Virgin Australia"], RXA: ["ZL", "Rex"],
+    UTY: ["QQ", "Alliance Airlines"], CVA: ["3C", "Air Chathams"], SDA: ["S8", "Sounds Air"],
+    FJI: ["FJ", "Fiji Airways"], ACI: ["SB", "Aircalin"], AVN: ["NF", "Air Vanuatu"],
+    SOL: ["IE", "Solomon Airlines"], ANG: ["PX", "Air Niugini"], HAL: ["HA", "Hawaiian Airlines"],
+    UAL: ["UA", "United"], AAL: ["AA", "American Airlines"], DAL: ["DL", "Delta"],
+    ACA: ["AC", "Air Canada"], SIA: ["SQ", "Singapore Airlines"], CPA: ["CX", "Cathay Pacific"],
+    UAE: ["EK", "Emirates"], QTR: ["QR", "Qatar Airways"], CES: ["MU", "China Eastern"],
+    CSN: ["CZ", "China Southern"], CCA: ["CA", "Air China"], KAL: ["KE", "Korean Air"],
+    JAL: ["JL", "Japan Airlines"], ANA: ["NH", "ANA"], THA: ["TG", "Thai Airways"],
+    MAS: ["MH", "Malaysia Airlines"], XAX: ["D7", "AirAsia X"], LAN: ["LA", "LATAM"],
+    GIA: ["GA", "Garuda Indonesia"], PAL: ["PR", "Philippine Airlines"], EVA: ["BR", "EVA Air"],
+    CAL: ["CI", "China Airlines"], VJT: ["VJ", "VietJet"], HVN: ["VN", "Vietnam Airlines"],
+    TGW: ["TR", "Scoot"], AIC: ["AI", "Air India"], ETD: ["EY", "Etihad"],
+  };
+  function flightIdentity(ac) {
+    const cs = ac.flight || "";
+    const m = /^([A-Z]{3})(\d{1,4})([A-Z]?)$/.exec(cs);
+    const al = m && AIRLINES[m[1]];
+    if (al && !m[3]) return { big: `${al[0]} ${m[2].replace(/^0+(?=\d)/, "")}`, airline: al[1], callsign: cs };
+    if (al) return { big: cs, airline: al[1], callsign: null };
+    return { big: callsign(ac), airline: null, callsign: null };
+  }
+  // A private/GA flight usually uses its registration as callsign: no route to look up
+  const isRegistrationCallsign = (ac) => !ac.flight || (ac.r && ac.flight === ac.r.replace("-", ""));
+
+  // Routes, cached per callsign for this page
+  const routes = new Map(); // callsign -> { state: "loading"|"done"|"error", airports }
+  function requestRoute(cs) {
+    if (routes.has(cs)) return;
+    routes.set(cs, { state: "loading", airports: [] });
+    fetch(`api/route?callsign=${encodeURIComponent(cs)}`)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(r.status))))
+      .then((d) => routes.set(cs, { state: "done", airports: d.airports || [] }))
+      .catch(() => { routes.set(cs, { state: "error", airports: [] }); setTimeout(() => routes.delete(cs), 60000); })
+      .finally(() => { if (hoverHex && aircraft.get(hoverHex) && aircraft.get(hoverHex).flight === cs) updateHoverCard(); });
+  }
+  const gcNm = (a, b) => map.distance([a.lat, a.lon], [b.lat, b.lon]) / 1852;
+  // Route databases can be stale (flight numbers get reused), so only show a leg the
+  // aircraft could plausibly be flying: it must be roughly between the two airports
+  function plausibleLeg(ac, airports) {
+    let best = null;
+    for (let i = 0; i + 1 < airports.length; i++) {
+      const o = airports[i], d = airports[i + 1];
+      if (o.lat == null || d.lat == null) continue;
+      const total = gcNm(o, d);
+      const detour = gcNm(ac, o) + gcNm(ac, d) - total;
+      if (detour <= total * 0.25 + 120 && (!best || detour < best.detour)) best = { o, d, detour };
+    }
+    return best;
+  }
+
+  function hoverCardHtml(ac) {
+    const id = flightIdentity(ac);
+    // The database shouts ("AIRBUS A-320"); soften all-caps words of 4+ letters, keep codes like ATR
+    const niceType = (ac.desc || ac.t || "").replace(/\b[A-Z]{4,}\b/g, (w) => w[0] + w.slice(1).toLowerCase());
+    const typeLine = [niceType, ac.r].filter(Boolean).join(" · ");
+    let routeHtml;
+    if (isRegistrationCallsign(ac)) {
+      routeHtml = `<div class="hc-route-none">No published route</div>`;
+    } else {
+      const r = routes.get(ac.flight);
+      const leg = r && r.state === "done" ? plausibleLeg(ac, r.airports) : null;
+      if (!r || r.state === "loading") routeHtml = `<div class="hc-route-none">Looking up route…</div>`;
+      else if (!leg) routeHtml = `<div class="hc-route-none">Route not available</div>`;
+      else {
+        const code = (a) => esc(a.iata || a.icao);
+        routeHtml = `<div class="hc-route">
+          <div><b>${code(leg.o)}</b><span>${esc(leg.o.short)}</span></div>
+          <div class="hc-arrow" aria-hidden="true">→</div>
+          <div><b>${code(leg.d)}</b><span>${esc(leg.d.short)}</span></div>
+        </div>`;
+      }
+    }
+    const altTxt = ac.alt === "ground" ? "On the ground" : typeof ac.alt === "number" ? `${ac.alt.toLocaleString("en-NZ")} ft` : "—";
+    const trend = typeof ac.vr === "number" && ac.alt !== "ground" ? (ac.vr > 300 ? " ▲" : ac.vr < -300 ? " ▼" : "") : "";
+    const spdTxt = typeof ac.gs === "number" ? `${Math.round(ac.gs)} kt <small>${Math.round(ac.gs * 1.852)} km/h</small>` : "—";
+    return `<div class="hc-top" style="border-color:${colorFor(ac)}">
+        <div class="hc-flight">${esc(id.big)}</div>
+        ${id.airline ? `<div class="hc-airline">${esc(id.airline)}${id.callsign ? ` · ${esc(id.callsign)}` : ""}</div>` : ""}
+        ${typeLine ? `<div class="hc-type">${esc(typeLine)}</div>` : ""}
+      </div>
+      ${routeHtml}
+      <div class="hc-stats">
+        <div><span>Altitude</span><b>${altTxt}${trend}</b></div>
+        <div><span>Speed</span><b>${spdTxt}</b></div>
+      </div>`;
+  }
+
+  function positionHoverCard() {
+    const ac = hoverHex && aircraft.get(hoverHex);
+    if (!ac || hoverCard.hidden) return;
+    const p = map.latLngToContainerPoint(projected(ac, nowS()));
+    const w = hoverCard.offsetWidth, h = hoverCard.offsetHeight;
+    const size = map.getSize();
+    let x = Math.min(Math.max(p.x - w / 2, 8), size.x - w - 8);
+    let y = p.y - h - 22; // above the aircraft…
+    if (y < 8) y = p.y + 22; // …or below it near the top edge
+    hoverCard.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
+  }
+  function updateHoverCard() {
+    const ac = hoverHex && aircraft.get(hoverHex);
+    if (!ac) { hideHoverCard(true); return; }
+    hoverCard.innerHTML = hoverCardHtml(ac);
+    hoverCard.hidden = false;
+    positionHoverCard();
+  }
+  function showHoverCard(hex) {
+    if (!canHover) return;
+    clearTimeout(hoverHideTimer);
+    hoverHex = hex;
+    const ac = aircraft.get(hex);
+    if (ac && !isRegistrationCallsign(ac)) requestRoute(ac.flight);
+    updateHoverCard();
+  }
+  function hideHoverCard(now) {
+    clearTimeout(hoverHideTimer);
+    const hide = () => { hoverHex = null; hoverCard.hidden = true; };
+    if (now) hide(); else hoverHideTimer = setTimeout(hide, 120);
+  }
+  map.on("move", positionHoverCard);
+  map.on("zoomstart", () => hideHoverCard(true));
 
   // ---------- List ----------
   const listEl = document.getElementById("list");

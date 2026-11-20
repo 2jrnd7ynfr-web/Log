@@ -268,6 +268,85 @@ async function getAirports() {
   return airportCache;
 }
 
+// ---------- Flight routes (origin/destination) from hexdb.io ----------
+// ADS-B doesn't carry a route, so it's looked up by callsign in hexdb.io's free
+// community database. Cached here so hovering costs one lookup per flight, shared
+// by all viewers. The database can be out of date, so the page also checks the
+// route is plausible for where the aircraft actually is.
+const HEXDB = "https://hexdb.io";
+const ROUTE_TTL_MS = 6 * 3600 * 1000;
+const ROUTE_MISS_TTL_MS = 3600 * 1000;
+const routeCache = new Map(); // callsign -> { at, value, ttl }
+const routeAirportCache = new Map(); // icao -> airport info or null
+const inflight = new Map();
+
+async function hexdb(pathAndQuery) {
+  const res = await fetch(`${HEXDB}${pathAndQuery}`, {
+    headers: { "User-Agent": "nz-skies-live/1.0" },
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!res.ok) throw new Error(`hexdb.io HTTP ${res.status}`);
+  return res;
+}
+
+// Trim "Christchurch International Airport" to "Christchurch" for a short label
+function shortAirportName(name) {
+  return String(name || "")
+    .replace(/\s*\(.*?\)\s*/g, " ")
+    .replace(/\b(International|Intl|Domestic|Regional|Municipal|Airport|Aerodrome|Airfield|Air Base)\b/gi, "")
+    .replace(/\s{2,}/g, " ").trim();
+}
+
+async function airportInfo(icao) {
+  if (routeAirportCache.has(icao)) return routeAirportCache.get(icao);
+  let info = null;
+  try {
+    const a = await (await hexdb(`/api/v1/airport/icao/${encodeURIComponent(icao)}`)).json();
+    if (a && a.icao) {
+      info = {
+        icao: a.icao, iata: a.iata || null, name: a.airport || a.icao,
+        short: shortAirportName(a.airport) || a.region_name || a.icao,
+        country: a.country_code || null, lat: a.latitude, lon: a.longitude,
+      };
+    }
+  } catch (e) {
+    console.warn(`[hexdb] airport ${icao}: ${e.message}`);
+    return null; // don't cache failures
+  }
+  routeAirportCache.set(icao, info);
+  return info;
+}
+
+async function lookupRoute(callsign) {
+  // hexdb answers an unknown callsign with 404 "n/a": that's "no route", not a failure
+  const res = await fetch(`${HEXDB}/callsign-route?callsign=${encodeURIComponent(callsign)}`, {
+    headers: { "User-Agent": "nz-skies-live/1.0" },
+    signal: AbortSignal.timeout(8000),
+  });
+  if (res.status === 404) return { callsign, airports: [] };
+  if (!res.ok) throw new Error(`hexdb.io HTTP ${res.status}`);
+  const text = (await res.text()).trim();
+  const codes = text.split("-").map((c) => c.trim().toUpperCase()).filter((c) => /^[A-Z0-9]{4}$/.test(c));
+  if (codes.length < 2) return { callsign, airports: [] };
+  const airports = await Promise.all(codes.map(airportInfo));
+  return { callsign, airports: airports.filter(Boolean) };
+}
+
+async function getRoute(callsign) {
+  const hit = routeCache.get(callsign);
+  if (hit && Date.now() - hit.at < hit.ttl) return hit.value;
+  if (inflight.has(callsign)) return inflight.get(callsign);
+  const p = lookupRoute(callsign)
+    .then((value) => {
+      routeCache.set(callsign, { at: Date.now(), value, ttl: value.airports.length >= 2 ? ROUTE_TTL_MS : ROUTE_MISS_TTL_MS });
+      if (routeCache.size > 5000) routeCache.delete(routeCache.keys().next().value);
+      return value;
+    })
+    .finally(() => inflight.delete(callsign));
+  inflight.set(callsign, p);
+  return p;
+}
+
 const PAGE = path.join(__dirname, "index.html");
 
 http
@@ -277,6 +356,18 @@ http
       // For hosting health checks: deliberately doesn't wake the adsb.fi poller
       res.writeHead(200, { "Content-Type": "text/plain", "Cache-Control": "no-store" });
       return res.end("ok");
+    }
+    if (url.pathname === "/api/route") {
+      const cs = String(url.searchParams.get("callsign") || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+      const send = (code, obj) => {
+        res.writeHead(code, { "Content-Type": "application/json", "Cache-Control": "no-store", "Access-Control-Allow-Origin": "*" });
+        res.end(JSON.stringify(obj));
+      };
+      if (!/^[A-Z0-9]{3,8}$/.test(cs)) return send(400, { error: "bad callsign" });
+      return getRoute(cs).then((r) => send(200, r), (e) => {
+        console.warn(`[hexdb] route ${cs}: ${e.message}`);
+        send(502, { error: "Route lookup unavailable" });
+      });
     }
     if (url.pathname === "/api/airports") {
       return getAirports().then((c) => {
