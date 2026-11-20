@@ -17,12 +17,22 @@ passengers know it (ANZ555 → **NZ 555**, with the airline), the aircraft type 
 registration, the route (**AKL → CHC**, with city names), altitude with a climb/descent
 arrow, and speed in knots and km/h. Touch screens keep tap-for-details instead.
 
-ADS-B doesn't broadcast routes, so they're looked up by callsign in
-[hexdb.io](https://hexdb.io)'s free community database through `server.js`
-(`/api/route`, cached 6 hours, shared by all viewers). It doesn't know every flight,
-especially regional and private ones ("Route not available"), and flight numbers get
-reused, so a route is only shown if the aircraft is actually somewhere between the two
-airports. Private flights using their registration as a callsign show "No published route".
+ADS-B doesn't broadcast routes, so `server.js` looks them up by callsign (`/api/route`,
+cached 6 hours and shared by all viewers):
+
+- **adsb.im** (primary, when `ROUTE_CONTACT_EMAIL` is set). Its terms ask for a
+  User-Agent with a contact address, plain http, and callsigns batched for at least 30 s.
+  So the server sends one batch every 30 s: the airline flights it's tracking (so routes
+  are usually ready before you hover) plus any hovered flight it doesn't know yet. The
+  address comes from the environment variable so it isn't in the code. On Render, set it
+  under the service's **Environment** tab.
+- **hexdb.io** (fallback, and the only source without the email setting). It answers
+  immediately while adsb.im's next batch is pending.
+
+Neither knows every flight, especially regional and private ones ("Route not
+available"), and flight numbers get reused, so a route is only shown if the aircraft
+is actually somewhere between the two airports. Private flights using their
+registration as a callsign show "No published route".
 
 ## Coverage: NZ first, plus Australia and the Pacific
 

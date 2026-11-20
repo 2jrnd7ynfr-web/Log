@@ -332,7 +332,7 @@ async function lookupRoute(callsign) {
   return { callsign, airports: airports.filter(Boolean) };
 }
 
-async function getRoute(callsign) {
+async function getHexdbRoute(callsign) {
   const hit = routeCache.get(callsign);
   if (hit && Date.now() - hit.at < hit.ttl) return hit.value;
   if (inflight.has(callsign)) return inflight.get(callsign);
@@ -345,6 +345,120 @@ async function getRoute(callsign) {
     .finally(() => inflight.delete(callsign));
   inflight.set(callsign, p);
   return p;
+}
+
+// ---------- Flight routes from adsb.im (primary, when a contact email is configured) ----------
+// adsb.im's route database (vradarserver standing data + live ACARS) has better coverage
+// than hexdb.io. Its terms: a User-Agent that lets its maintainers contact you, plain
+// http (not https, to reduce their load), and callsigns batched for at least 30 s per
+// request. So the server collects callsigns (from hovers, and pre-fetches airline
+// flights it's tracking) and sends one batch every 30 s; hexdb.io answers meanwhile.
+// The contact address comes from the ROUTE_CONTACT_EMAIL environment variable (set it
+// in the Render dashboard) so it isn't written into the code. Without it, only
+// hexdb.io is used.
+const ROUTE_CONTACT = (process.env.ROUTE_CONTACT_EMAIL || "").trim();
+const ADSBIM_URL = process.env.ADSBIM_URL || "http://adsb.im/api/0/routeset";
+const ADSBIM_BATCH_MS = 30 * 1000;
+const ADSBIM_MAX_BATCH = 100;
+const adsbimCache = new Map(); // callsign -> { at, ttl, value: { callsign, airports } }
+const adsbimQueue = new Map(); // callsign -> { lat, lng }
+let adsbimPausedUntil = 0;
+
+const toApiLon = (lon) => (lon > 180 ? +(lon - 360).toFixed(4) : lon);
+const AIRLINE_CALLSIGN = /^[A-Z]{3}\d{1,4}[A-Z]{0,2}$/;
+
+function adsbimFresh(cs) {
+  const hit = adsbimCache.get(cs);
+  return hit && Date.now() - hit.at < hit.ttl ? hit : null;
+}
+function queueAdsbim(cs, lat, lng) {
+  if (!ROUTE_CONTACT || adsbimFresh(cs)) return false;
+  adsbimQueue.set(cs, { lat: +(+lat || 0).toFixed(4), lng: toApiLon(+lng || 0) });
+  return true;
+}
+
+// Turn one adsb.im route object into our airport list (tolerating field variations)
+async function adsbimAirports(r) {
+  if (!r || typeof r !== "object" || r.plausible === false || r.plausible === 0) return [];
+  if (Array.isArray(r._airports) && r._airports.length >= 2) {
+    return r._airports.map((a) => ({
+      icao: a.icao || null, iata: a.iata || null, name: a.name || a.icao || "",
+      short: a.location || shortAirportName(a.name) || a.icao,
+      country: a.countryiso2 || null, lat: a.lat, lon: a.lon,
+    })).filter((a) => typeof a.lat === "number" && typeof a.lon === "number");
+  }
+  // Only codes given: resolve them via hexdb's airport lookup
+  const codes = String(r.airport_codes || "").split("-").filter((c) => /^[A-Z0-9]{4}$/.test(c));
+  if (codes.length < 2) return [];
+  return (await Promise.all(codes.map(airportInfo))).filter(Boolean);
+}
+
+async function adsbimBatch() {
+  if (!ROUTE_CONTACT || Date.now() < adsbimPausedUntil) return;
+  // Pre-fetch airline flights currently being tracked, so routes are ready before a hover
+  if (polling) {
+    const cutoff = Date.now() / 1000 - 60;
+    for (const { ac, seenTime } of aircraftByHex.values()) {
+      const cs = (ac.flight || "").trim();
+      if (seenTime > cutoff && AIRLINE_CALLSIGN.test(cs) && !adsbimQueue.has(cs)) queueAdsbim(cs, ac.lat, ac.lon);
+    }
+  }
+  if (!adsbimQueue.size) return;
+  const batch = [...adsbimQueue].slice(0, ADSBIM_MAX_BATCH);
+  const planes = batch.map(([callsign, p]) => ({ callsign, lat: p.lat, lng: p.lng }));
+  try {
+    const res = await fetch(ADSBIM_URL, {
+      method: "POST",
+      headers: {
+        "User-Agent": `nz-skies-live/1.0 (contact: ${ROUTE_CONTACT})`,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({ planes }),
+      signal: AbortSignal.timeout(20000),
+    });
+    if (!res.ok) {
+      const detail = (await res.text().catch(() => "")).slice(0, 300).replace(/\s+/g, " ");
+      // Refused or overloaded: back off rather than retrying every 30 s
+      adsbimPausedUntil = Date.now() + (res.status === 403 ? 3600e3 : 5 * 60e3);
+      throw new Error(`HTTP ${res.status} ${detail}`);
+    }
+    const out = await res.json();
+    if (!Array.isArray(out)) throw new Error("unexpected response");
+    // Same length and order as the request; tolerate entries that name their callsign
+    await Promise.all(batch.map(async ([cs], i) => {
+      const r = out.find((x) => x && x.callsign === cs) || out[i];
+      const airports = await adsbimAirports(r && (!r.callsign || r.callsign === cs) ? r : null);
+      adsbimCache.set(cs, {
+        at: Date.now(), ttl: airports.length >= 2 ? ROUTE_TTL_MS : ROUTE_MISS_TTL_MS,
+        value: { callsign: cs, airports },
+      });
+      adsbimQueue.delete(cs);
+    }));
+    if (adsbimCache.size > 8000) adsbimCache.delete(adsbimCache.keys().next().value);
+  } catch (e) {
+    console.warn(`[adsb.im] ${e.message}`);
+  }
+}
+if (ROUTE_CONTACT) {
+  setInterval(adsbimBatch, ADSBIM_BATCH_MS).unref();
+  console.log("Route lookups: adsb.im (batched) with hexdb.io fallback");
+} else {
+  console.log("Route lookups: hexdb.io (set ROUTE_CONTACT_EMAIL to also use adsb.im)");
+}
+
+// adsb.im if it has the route; otherwise hexdb.io now, with adsb.im queued for next batch
+async function getRoute(cs, lat, lng) {
+  const im = adsbimFresh(cs);
+  if (im && im.value.airports.length >= 2) return { ...im.value, source: "adsb.im" };
+  const pending = !im && lat != null && queueAdsbim(cs, lat, lng);
+  try {
+    const hx = await getHexdbRoute(cs);
+    return { ...hx, source: hx.airports.length >= 2 ? "hexdb.io" : null, pending };
+  } catch (e) {
+    if (pending) return { callsign: cs, airports: [], source: null, pending };
+    throw e;
+  }
 }
 
 const PAGE = path.join(__dirname, "index.html");
@@ -364,8 +478,11 @@ http
         res.end(JSON.stringify(obj));
       };
       if (!/^[A-Z0-9]{3,8}$/.test(cs)) return send(400, { error: "bad callsign" });
-      return getRoute(cs).then((r) => send(200, r), (e) => {
-        console.warn(`[hexdb] route ${cs}: ${e.message}`);
+      const lat = parseFloat(url.searchParams.get("lat"));
+      const lon = parseFloat(url.searchParams.get("lon"));
+      const pos = Number.isFinite(lat) && Number.isFinite(lon) ? [lat, lon] : [null, null];
+      return getRoute(cs, ...pos).then((r) => send(200, r), (e) => {
+        console.warn(`[route] ${cs}: ${e.message}`);
         send(502, { error: "Route lookup unavailable" });
       });
     }

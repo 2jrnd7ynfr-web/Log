@@ -226,34 +226,79 @@
   .banner.show { display: block; }
   .map-wrap { position: relative; min-height: 0; display: grid; }
 
-  /* Hover card (desktop) */
+  /* Hover card (desktop): brushed-metal panel, silver in light mode, gunmetal in dark */
+  :root {
+    --hc-metal: linear-gradient(165deg, #FBFCFD 0%, #E8ECF0 38%, #D6DCE2 52%, #E9EDF1 70%, #F7F8FA 100%);
+    --hc-brush: repeating-linear-gradient(90deg, rgba(255,255,255,0.22) 0 1px, rgba(0,0,0,0.018) 1px 3px);
+    --hc-ink: #18212B;
+    --hc-sub: #4F5D6B;
+    --hc-rule: rgba(24, 33, 43, 0.12);
+    --hc-rule-hi: rgba(255, 255, 255, 0.75);
+    --hc-edge: #AEB7C1;
+    --hc-hi: rgba(255, 255, 255, 0.95);
+    --hc-emboss: 0 1px 0 rgba(255, 255, 255, 0.7);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --hc-metal: linear-gradient(165deg, #4A535D 0%, #353C45 40%, #2A3038 55%, #343B44 75%, #444C56 100%);
+      --hc-brush: repeating-linear-gradient(90deg, rgba(255,255,255,0.03) 0 1px, rgba(0,0,0,0.05) 1px 3px);
+      --hc-ink: #F1F4F7;
+      --hc-sub: #B3BEC9;
+      --hc-rule: rgba(0, 0, 0, 0.35);
+      --hc-rule-hi: rgba(255, 255, 255, 0.07);
+      --hc-edge: #161B20;
+      --hc-hi: rgba(255, 255, 255, 0.16);
+      --hc-emboss: 0 1px 0 rgba(0, 0, 0, 0.45);
+    }
+  }
+  :root[data-theme="dark"] {
+    --hc-metal: linear-gradient(165deg, #4A535D 0%, #353C45 40%, #2A3038 55%, #343B44 75%, #444C56 100%);
+    --hc-brush: repeating-linear-gradient(90deg, rgba(255,255,255,0.03) 0 1px, rgba(0,0,0,0.05) 1px 3px);
+    --hc-ink: #F1F4F7;
+    --hc-sub: #B3BEC9;
+    --hc-rule: rgba(0, 0, 0, 0.35);
+    --hc-rule-hi: rgba(255, 255, 255, 0.07);
+    --hc-edge: #161B20;
+    --hc-hi: rgba(255, 255, 255, 0.16);
+    --hc-emboss: 0 1px 0 rgba(0, 0, 0, 0.45);
+  }
   .hover-card {
     position: absolute; left: 0; top: 0; z-index: 950; pointer-events: none;
-    width: 270px; background: var(--surface); color: var(--ink);
-    border: 1px solid var(--line); border-radius: 12px;
-    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28);
+    width: 264px; color: var(--hc-ink);
+    background: var(--hc-brush), var(--hc-metal);
+    border-radius: 14px;
+    box-shadow:
+      0 0 0 1px var(--hc-edge),
+      inset 0 1px 0 var(--hc-hi),
+      inset 0 -1px 0 rgba(0, 0, 0, 0.08),
+      0 12px 32px rgba(0, 0, 0, 0.30),
+      0 2px 6px rgba(0, 0, 0, 0.15);
     font-family: var(--sans); overflow: hidden;
+    text-shadow: var(--hc-emboss);
   }
   .hover-card[hidden] { display: none; }
-  .hc-top { padding: 12px 14px 10px; border-left: 6px solid; }
-  .hc-flight { font-size: 24px; font-weight: 700; letter-spacing: -0.01em; line-height: 1.1; }
-  .hc-airline { font-size: 15px; font-weight: 600; margin-top: 3px; }
-  .hc-type { font-size: 14px; color: var(--muted); margin-top: 2px; }
-  .hc-route {
-    display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 8px;
-    padding: 10px 14px; border-top: 1px solid var(--line); background: var(--surface-2);
+  /* Engraved dividers: a dark hairline with a highlight beneath */
+  .hover-card .hc-route, .hover-card .hc-route-none, .hover-card .hc-stats {
+    border-top: 1px solid var(--hc-rule);
+    box-shadow: inset 0 1px 0 var(--hc-rule-hi);
   }
+  .hc-top { padding: 14px 16px 12px; }
+  .hc-flight { font-size: 26px; font-weight: 700; letter-spacing: 0.01em; line-height: 1.05; }
+  .hc-airline { font-size: 15px; font-weight: 600; margin-top: 4px; }
+  .hc-type { font-size: 13px; color: var(--hc-sub); margin-top: 2px; }
+  .hc-route { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 8px; padding: 11px 16px; }
   .hc-route > div:last-child { text-align: right; }
-  .hc-route b { display: block; font-size: 22px; font-weight: 700; line-height: 1.1; }
-  .hc-route span { display: block; font-size: 14px; color: var(--muted); }
-  .hc-arrow { font-size: 22px; color: var(--muted); }
-  .hc-route-none { padding: 10px 14px; border-top: 1px solid var(--line); background: var(--surface-2); font-size: 15px; color: var(--muted); }
-  .hc-stats { display: grid; grid-template-columns: 1fr 1fr; border-top: 1px solid var(--line); }
-  .hc-stats > div { padding: 9px 14px; }
-  .hc-stats > div + div { border-left: 1px solid var(--line); }
-  .hc-stats span { display: block; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
-  .hc-stats b { display: block; font-size: 18px; font-weight: 600; margin-top: 1px; white-space: nowrap; }
-  .hc-stats small { font-size: 13px; font-weight: 400; color: var(--muted); }
+  .hc-route b { display: block; font-size: 24px; font-weight: 700; line-height: 1.05; letter-spacing: 0.02em; }
+  .hc-route span { display: block; font-size: 13px; color: var(--hc-sub); margin-top: 2px; }
+  .hc-arrow { font-size: 20px; color: var(--hc-sub); }
+  .hc-route-none { padding: 11px 16px; font-size: 14px; color: var(--hc-sub); }
+  .hc-stats { display: grid; grid-template-columns: 1fr 1fr; }
+  .hc-stats > div { padding: 10px 16px 12px; }
+  .hc-stats > div + div { border-left: 1px solid var(--hc-rule); box-shadow: inset 1px 0 0 var(--hc-rule-hi); }
+  .hc-stats span { display: block; font-size: 11px; font-weight: 600; color: var(--hc-sub); text-transform: uppercase; letter-spacing: 0.08em; }
+  .hc-stats b { display: block; font-size: 18px; font-weight: 600; margin-top: 2px; white-space: nowrap; }
+  .hc-stats small { font-size: 12px; font-weight: 400; color: var(--hc-sub); }
+  .hc-trend { font-style: normal; font-size: 11px; color: var(--hc-sub); vertical-align: 2px; }
 
   /* Wind layer control */
   .wind-ctl {
@@ -827,12 +872,21 @@
 
   // Routes, cached per callsign for this page
   const routes = new Map(); // callsign -> { state: "loading"|"done"|"error", airports }
-  function requestRoute(cs) {
+  function requestRoute(cs, ac) {
     if (routes.has(cs)) return;
     routes.set(cs, { state: "loading", airports: [] });
-    fetch(`api/route?callsign=${encodeURIComponent(cs)}`)
+    const pos = ac ? `&lat=${ac.lat.toFixed(4)}&lon=${ac.lon.toFixed(4)}` : "";
+    fetch(`api/route?callsign=${encodeURIComponent(cs)}${pos}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(r.status))))
-      .then((d) => routes.set(cs, { state: "done", airports: d.airports || [] }))
+      .then((d) => {
+        routes.set(cs, { state: "done", airports: d.airports || [] });
+        // adsb.im answers in 30-second batches: if it's still looking, ask again after
+        if (d.pending) setTimeout(() => {
+          routes.delete(cs);
+          const h = hoverHex && aircraft.get(hoverHex);
+          if (h && h.flight === cs) requestRoute(cs, h);
+        }, 32000);
+      })
       .catch(() => { routes.set(cs, { state: "error", airports: [] }); setTimeout(() => routes.delete(cs), 60000); })
       .finally(() => { if (hoverHex && aircraft.get(hoverHex) && aircraft.get(hoverHex).flight === cs) updateHoverCard(); });
   }
@@ -874,9 +928,9 @@
       }
     }
     const altTxt = ac.alt === "ground" ? "On the ground" : typeof ac.alt === "number" ? `${ac.alt.toLocaleString("en-NZ")} ft` : "—";
-    const trend = typeof ac.vr === "number" && ac.alt !== "ground" ? (ac.vr > 300 ? " ▲" : ac.vr < -300 ? " ▼" : "") : "";
+    const trend = typeof ac.vr === "number" && ac.alt !== "ground" ? (ac.vr > 300 ? ' <i class="hc-trend" title="Climbing">▲</i>' : ac.vr < -300 ? ' <i class="hc-trend" title="Descending">▼</i>' : "") : "";
     const spdTxt = typeof ac.gs === "number" ? `${Math.round(ac.gs)} kt <small>${Math.round(ac.gs * 1.852)} km/h</small>` : "—";
-    return `<div class="hc-top" style="border-color:${colorFor(ac)}">
+    return `<div class="hc-top">
         <div class="hc-flight">${esc(id.big)}</div>
         ${id.airline ? `<div class="hc-airline">${esc(id.airline)}${id.callsign ? ` · ${esc(id.callsign)}` : ""}</div>` : ""}
         ${typeLine ? `<div class="hc-type">${esc(typeLine)}</div>` : ""}
@@ -911,7 +965,7 @@
     clearTimeout(hoverHideTimer);
     hoverHex = hex;
     const ac = aircraft.get(hex);
-    if (ac && !isRegistrationCallsign(ac)) requestRoute(ac.flight);
+    if (ac && !isRegistrationCallsign(ac)) requestRoute(ac.flight, ac);
     updateHoverCard();
   }
   function hideHoverCard(now) {
