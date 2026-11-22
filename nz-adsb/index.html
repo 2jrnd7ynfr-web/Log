@@ -580,7 +580,26 @@
     light:"M0,-10 L1.4,-7 L1.4,-3 L10,-2 L10,0.5 L1.4,1 L1,7 L4,8 L4,9.5 L0,9 L-4,9.5 L-4,8 L-1,7 L-1.4,1 L-10,0.5 L-10,-2 L-1.4,-3 L-1.4,-7 Z",
     heli: "M0,-7 C3,-7 3.5,-3 3.5,0 C3.5,3 2,5 1,5.5 L0.8,11 L3,11.5 L3,12.5 L-3,12.5 L-3,11.5 L-0.8,11 L-1,5.5 C-2,5 -3.5,3 -3.5,0 C-3.5,-3 -3,-7 0,-7 Z M-11,-1.2 L11,-1.2 L11,0.2 L-11,0.2 Z",
     other:"M0,-7 L6,6 L0,3 L-6,6 Z",
+    ground:"M-4.5,-4.5 H4.5 V4.5 H-4.5 Z",
   };
+  // Not everything transmitting ADS-B is an aircraft. Emitter categories C0-C7 are
+  // airport vehicles and fixed ground objects, and the aircraft database marks NZ's
+  // fixed ground transmitters (Airways sites, many with no callsign) as type "TWR".
+  const BEACON_CALLSIGN = /^(TWR|TXP|TEST|BCN|BEACON|SITE|XPDR)/;
+  function isNonAircraft(ac) {
+    if (ac.t === "TWR" || ac.r === "TWR") return true;
+    if (ac.category && ac.category[0] === "C") return true;
+    const still = ac.alt === "ground" || typeof ac.gs !== "number" || ac.gs < 5;
+    return still && BEACON_CALLSIGN.test(ac.flight || "");
+  }
+  function nonAircraftKind(ac) {
+    return { C1: "Emergency vehicle", C2: "Airport service vehicle", C3: "Ground obstacle" }[ac.category] ||
+      (ac.t === "TWR" || BEACON_CALLSIGN.test(ac.flight || "") || ac.category === "C0" ? "Ground transmitter (beacon)" : "Ground vehicle or object");
+  }
+  let showGroundObjects = false;
+  try { showGroundObjects = localStorage.getItem("nzskies-ground") === "1"; } catch {}
+  const isShown = (ac) => showGroundObjects || !ac.nonAircraft;
+
   function glyphFor(cat) {
     if (!cat) return "jet";
     if (cat === "A7") return "heli";
@@ -589,7 +608,7 @@
     return "other";
   }
   function makeIcon(ac, sel) {
-    const size = ac.glyph === "jet" ? 28 : 24;
+    const size = ac.glyph === "jet" ? 28 : ac.glyph === "ground" ? 16 : 24;
     const rot = typeof ac.track === "number" ? ac.track : 0;
     const strokeC = getComputedStyle(root).getPropertyValue("--plane-stroke").trim() || "#000";
     const html = `<svg width="${size}" height="${size}" viewBox="-13 -13 26 26">
@@ -638,7 +657,8 @@
       ac.squawk = raw.squawk || "";
       ac.emergency = raw.emergency;
       ac.category = raw.category || "";
-      ac.glyph = glyphFor(ac.category);
+      ac.nonAircraft = isNonAircraft(ac);
+      ac.glyph = ac.nonAircraft ? "ground" : glyphFor(ac.category);
       ac.lat = raw.lat; ac.lon = raw.lon;
       ac.posTime = posTime;
       ac.lastSeen = nowS - (raw.seen || 0);
@@ -751,6 +771,12 @@
         if (selected === hex) select(null);
         continue;
       }
+      if (!isShown(ac)) {
+        if (ac.marker) { planeLayer.removeLayer(ac.marker); ac.marker = null; ac.iconKey = ""; }
+        if (hoverHex === hex) hideHoverCard(true);
+        if (selected === hex) select(null);
+        continue;
+      }
       const pos = projected(ac, t);
       const sel = hex === selected;
       const key = iconKey(ac, sel);
@@ -781,7 +807,13 @@
     if (hoverHex) updateHoverCard(); // live altitude/speed while pointing at it
     const view = map.getBounds();
     let inView = 0;
-    for (const ac of aircraft.values()) if (view.contains([ac.lat, ac.lon])) inView++;
+    let hiddenInView = 0;
+    for (const ac of aircraft.values()) {
+      if (!view.contains([ac.lat, ac.lon])) continue;
+      if (isShown(ac)) inView++; else hiddenInView++;
+    }
+    const gm = document.getElementById("groundMeta");
+    if (gm) gm.textContent = showGroundObjects ? "Shown as small squares" : hiddenInView ? `${hiddenInView} hidden in view` : "None in view";
     document.getElementById("count").textContent = inView;
     document.getElementById("updated").textContent = lastOk
       ? new Date(lastOk).toLocaleTimeString("en-NZ", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
@@ -864,9 +896,11 @@
     const id = flightIdentity(ac);
     // The database shouts ("AIRBUS A-320"); soften all-caps words of 4+ letters, keep codes like ATR
     const niceType = (ac.desc || ac.t || "").replace(/\b[A-Z]{4,}\b/g, (w) => w[0] + w.slice(1).toLowerCase());
-    const typeLine = [niceType, ac.r].filter(Boolean).join(" · ");
+    const typeLine = ac.nonAircraft ? nonAircraftKind(ac) : [niceType, ac.r].filter(Boolean).join(" · ");
     let routeHtml;
-    if (isRegistrationCallsign(ac)) {
+    if (ac.nonAircraft) {
+      routeHtml = "";
+    } else if (isRegistrationCallsign(ac)) {
       routeHtml = `<div class="hc-route-none">No published route</div>`;
     } else {
       const r = routes.get(ac.flight);
@@ -882,7 +916,7 @@
         </div>`;
       }
     }
-    const altTxt = ac.alt === "ground" ? "On the ground" : typeof ac.alt === "number" ? `${ac.alt.toLocaleString("en-NZ")} ft` : "—";
+    const altTxt = ac.alt === "ground" ? "Ground" : typeof ac.alt === "number" ? `${ac.alt.toLocaleString("en-NZ")} ft` : "—";
     const trend = typeof ac.vr === "number" && ac.alt !== "ground" ? (ac.vr > 300 ? ' <i class="hc-trend" title="Climbing">▲</i>' : ac.vr < -300 ? ' <i class="hc-trend" title="Descending">▼</i>' : "") : "";
     const spdTxt = typeof ac.gs === "number" ? `${Math.round(ac.gs)} kt <small>${Math.round(ac.gs * 1.852)} km/h</small>` : "—";
     return `<div class="hc-top">
@@ -891,10 +925,10 @@
         ${typeLine ? `<div class="hc-type">${esc(typeLine)}</div>` : ""}
       </div>
       ${routeHtml}
-      <div class="hc-stats">
+      ${ac.nonAircraft ? "" : `<div class="hc-stats">
         <div><span>Altitude</span><b>${altTxt}${trend}</b></div>
         <div><span>Speed</span><b>${spdTxt}</b></div>
-      </div>`;
+      </div>`}`;
   }
 
   function positionHoverCard() {
@@ -920,7 +954,7 @@
     clearTimeout(hoverHideTimer);
     hoverHex = hex;
     const ac = aircraft.get(hex);
-    if (ac && !isRegistrationCallsign(ac)) requestRoute(ac.flight, ac);
+    if (ac && !ac.nonAircraft && !isRegistrationCallsign(ac)) requestRoute(ac.flight, ac);
     updateHoverCard();
   }
   function hideHoverCard(now) {
@@ -941,7 +975,7 @@
     const q = searchEl.value.trim().toLowerCase();
     // The list follows the map: aircraft in view (plus the selected one)
     const view = map.getBounds();
-    let rows = [...aircraft.values()].filter((ac) => ac.hex === selected || view.contains([ac.lat, ac.lon]));
+    let rows = [...aircraft.values()].filter((ac) => isShown(ac) && (ac.hex === selected || view.contains([ac.lat, ac.lon])));
     if (q) {
       rows = rows.filter((ac) =>
         [ac.flight, ac.r, ac.t, ac.desc, ac.hex, ac.squawk, ac.op].some((v) => v && v.toLowerCase().includes(q)));
@@ -1409,6 +1443,10 @@
     d.innerHTML = `
       <button class="lyr-head" id="lyrHead" aria-expanded="true">Layers <span aria-hidden="true">▾</span></button>
       <div class="lyr-body">
+      <div class="lyr-sec on" id="gdSec">
+        <label class="lyr-row"><input type="checkbox" id="groundToggle"><span>Ground vehicles &amp; beacons</span></label>
+        <div class="lyr-more"><div class="wind-meta" id="groundMeta"></div></div>
+      </div>
       <div class="lyr-sec" id="apSec">
         <label class="lyr-row"><input type="checkbox" id="apToggle"><span>Airport weather</span></label>
         <div class="lyr-more">
@@ -1784,6 +1822,15 @@
     for (const mk of apMarkers.values()) if (mk._ap) mk.setIcon(apIcon(mk._ap));
   });
   apToggle.addEventListener("change", () => setAirports(apToggle.checked));
+
+  const groundToggle = document.getElementById("groundToggle");
+  groundToggle.checked = showGroundObjects;
+  groundToggle.addEventListener("change", () => {
+    showGroundObjects = groundToggle.checked;
+    try { localStorage.setItem("nzskies-ground", showGroundObjects ? "1" : "0"); } catch {}
+    render();
+    renderList();
+  });
   if (apOn) setAirports(true);
 
   // Keep the forecast hour current, and refresh the data when it gets old

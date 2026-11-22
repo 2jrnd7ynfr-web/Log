@@ -59,6 +59,10 @@ often as ones at its edges. In practice:
 
 The **Layers** panel at the top right of the map (collapsed by default on phones) has:
 
+- **Ground vehicles & beacons** (off by default): not everything broadcasting ADS-B is an
+  aircraft. Airport vehicles (emitter categories C0-C7) and NZ's fixed ground transmitters
+  (marked type "TWR" in the aircraft database, e.g. Airways sites, often with no callsign)
+  are hidden unless this is ticked, then shown as small grey squares.
 - **Airport weather**: the latest METAR at each NZ airport, coloured by flight category
   (VFR / MVFR / IFR / LIFR) and labelled with the wind. Click one for the decoded report,
   the raw METAR and the TAF. Data comes from NOAA's Aviation Weather Center through
