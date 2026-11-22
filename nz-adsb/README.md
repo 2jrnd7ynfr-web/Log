@@ -12,7 +12,7 @@ Works on phones, and has light and dark themes.
 
 ## Hover card (desktop)
 
-On a computer, point at any aircraft for a large card with the flight number as
+On a computer, point at any aircraft for a compact card with the flight number as
 passengers know it (ANZ555 → **NZ 555**, with the airline), the aircraft type and
 registration, the route (**AKL → CHC**, with city names), altitude with a climb/descent
 arrow, and speed in knots and km/h. Touch screens keep tap-for-details instead.
