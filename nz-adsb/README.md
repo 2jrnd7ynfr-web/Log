@@ -98,7 +98,9 @@ The **Layers** panel at the top right of the map (collapsed by default on phones
 The **Wind** box at the top right of the map overlays forecast winds at the surface,
 ~5,000 ft (850 hPa), ~18,000 ft (500 hPa) or ~34,000 ft (250 hPa). Flowing particles show
 direction and a colour tint shows speed in knots. Point at (or tap) the map for the wind at
-that spot.
+that spot. A time slider under the legend runs the forecast forward hour by hour
+up to three days ahead ("Now" jumps back); the label turns blue and says how far ahead
+you're looking, since aircraft and radar always stay live.
 
 Wind data comes from [Open-Meteo](https://open-meteo.com/) (free, no key, CC BY 4.0). The
 browser fetches it directly rather than `server.js`, because Open-Meteo's free allowance

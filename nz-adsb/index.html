@@ -281,6 +281,12 @@
   .wind-ctl .wind-meta { color: var(--muted); margin-top: 6px; line-height: 1.4; }
   .wind-ctl .wind-here { font-family: var(--mono); margin-top: 4px; min-height: 1.4em; }
   .wind-ctl .wind-err { color: var(--alert); }
+  .wind-time { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+  .wind-time .icon-btn { height: 26px; min-width: 0; padding: 0 8px; font-size: 11px; }
+  .wind-time input { flex: 1; min-width: 0; accent-color: var(--accent); }
+  .wind-time-ticks { display: flex; justify-content: space-between; margin: 1px 0 0 52px; color: var(--muted); font-size: 10px; }
+  .wind-when { margin-top: 5px; font-weight: 600; }
+  .wind-when.ahead { color: var(--accent); }
   .wind-ctl .lyr-head {
     display: flex; justify-content: space-between; width: 100%;
     background: none; border: none; color: var(--ink); padding: 0 0 6px;
@@ -1162,7 +1168,10 @@
   const WIND_MAX_POINTS = 250;
   const WIND_MIN_GAP_MS = 35 * 1000;
   let windLastFetchAt = 0;
-  const WIND_CACHE_KEY = "nzskies-wind-v3";
+  const WIND_CACHE_KEY = "nzskies-wind-v4";
+  // Forecast range for the time slider (hourly steps). Same Open-Meteo cost as a
+  // shorter range: each grid point is one call whatever the number of hours.
+  const WIND_AHEAD_H = 72;
   let WIND_STEP = 1.5, WIND_LATS = [], WIND_LONS = []; // grid of the loaded data
   let windRetryAt = 0; // after an error, don't refetch on every pan
   let windMoveTimer = null;
@@ -1253,7 +1262,7 @@
       const keys = Object.keys(WIND_LEVELS);
       const hourly = keys.flatMap((k) => [`wind_speed_${k}`, `wind_direction_${k}`]).join(",");
       const url = `https://api.open-meteo.com/v1/forecast?latitude=${qLat.join(",")}&longitude=${qLon.join(",")}` +
-        `&hourly=${hourly}&wind_speed_unit=kn&timeformat=unixtime&past_hours=2&forecast_hours=12`;
+        `&hourly=${hourly}&wind_speed_unit=kn&timeformat=unixtime&past_hours=2&forecast_hours=${WIND_AHEAD_H + 2}`;
       const res = await fetch(url);
       const body = await res.json().catch(() => null);
       if (!res.ok || !body || body.error) {
@@ -1262,12 +1271,14 @@
       const pts = Array.isArray(body) ? body : [body];
       if (pts.length !== qLat.length) throw new Error("Unexpected wind data shape");
       const times = pts[0].hourly.time;
+      const keepIdx = times.map((_, i) => i);
+      const r1 = (x) => (x == null ? null : Math.round(x * 10) / 10);
       const levels = {};
       for (const k of keys) {
         // s[t][p], d[t][p]
         levels[k] = {
-          s: times.map((_, t) => pts.map((p) => p.hourly[`wind_speed_${k}`][t])),
-          d: times.map((_, t) => pts.map((p) => p.hourly[`wind_direction_${k}`][t])),
+          s: keepIdx.map((t) => pts.map((p) => r1(p.hourly[`wind_speed_${k}`][t]))),
+          d: keepIdx.map((t) => pts.map((p) => p.hourly[`wind_direction_${k}`][t])),
         };
       }
       const data = { fetchedAt: Date.now(), times, levels, grid: { step: grid.step, lats: grid.lats, lons: grid.lons } };
@@ -1283,14 +1294,17 @@
     finally { windFetching = null; }
   }
 
+  let windTarget = null; // forecast time chosen on the slider (unix s); null = now
   function buildWindField() {
     windField = null;
     if (!windData || windLevel === "off") return;
     const lv = windData.levels[windLevel];
     if (!lv) return;
     const now = Date.now() / 1000;
+    if (windTarget != null && windTarget < now - 1800) windTarget = null; // that time has passed
+    const want = windTarget ?? now;
     let ti = 0;
-    windData.times.forEach((t, i) => { if (Math.abs(t - now) < Math.abs(windData.times[ti] - now)) ti = i; });
+    windData.times.forEach((t, i) => { if (Math.abs(t - want) < Math.abs(windData.times[ti] - want)) ti = i; });
     const n = WIND_LATS.length * WIND_LONS.length;
     const u = new Float32Array(n), v = new Float32Array(n);
     for (let p = 0; p < n; p++) {
@@ -1504,6 +1518,12 @@
       <div class="wind-more">
         <div class="bar" id="windBar"></div>
         <div class="ticks">${ticks}</div>
+        <div class="wind-time">
+          <button class="icon-btn" id="windNow" title="Back to now">Now</button>
+          <input type="range" id="windSlider" min="0" max="0" value="0" step="1" aria-label="Forecast time">
+        </div>
+        <div class="wind-time-ticks"><span>Now</span><span>+1 day</span><span>+2 days</span><span>+3 days</span></div>
+        <div class="wind-when" id="windWhen"></div>
         <div class="wind-here" id="windHere">${matchMedia("(hover: none)").matches ? "Tap" : "Point at"} the map for wind there</div>
         <div class="wind-meta" id="windMeta"></div>
       </div>
@@ -1522,17 +1542,60 @@
     WIND_STOPS.map(([, c], i) => `rgb(${c.join(",")}) ${(i / (WIND_STOPS.length - 1) * 100).toFixed(1)}%`).join(",")})`;
   windSelect.value = windLevel;
 
+  // ---- Forecast time slider: positions are the forecast hours from now to +3 days ----
+  const windSlider = document.getElementById("windSlider");
+  const windNowBtn = document.getElementById("windNow");
+  const windWhen = document.getElementById("windWhen");
+  let windSteps = []; // unix times the slider can show
+  function syncWindSlider() {
+    const now = Date.now() / 1000;
+    windSteps = windData ? windData.times.filter((t) => t > now - 1800 && t <= now + (WIND_AHEAD_H + 1) * 3600) : [];
+    windSlider.max = String(Math.max(0, windSteps.length - 1));
+    windSlider.disabled = windSteps.length < 2;
+    let idx = 0;
+    if (windTarget != null) windSteps.forEach((t, i) => { if (Math.abs(t - windTarget) < Math.abs(windSteps[idx] - windTarget)) idx = i; });
+    windSlider.value = String(idx);
+    updateWindWhen();
+  }
+  function updateWindWhen() {
+    if (!windField) { windWhen.textContent = ""; windWhen.classList.remove("ahead"); return; }
+    const when = new Date(windField.time * 1000).toLocaleString("en-NZ", {
+      timeZone: "Pacific/Auckland", weekday: "short", hour: "numeric", minute: "2-digit",
+    });
+    const ahead = windTarget != null ? Math.round((windField.time - Date.now() / 1000) / 3600) : 0;
+    const days = Math.floor(ahead / 24), hrs = ahead % 24;
+    const rel = ahead < 24 ? `+${ahead} h` : `+${days} day${days > 1 ? "s" : ""}${hrs ? ` ${hrs} h` : ""}`;
+    windWhen.textContent = ahead <= 0 ? `Now · ${when} NZ time` : `Forecast ${rel} · ${when} NZ time`;
+    windWhen.classList.toggle("ahead", ahead > 0);
+    windNowBtn.disabled = ahead <= 0;
+  }
+  let windSlideFrame = null;
+  windSlider.addEventListener("input", () => {
+    const i = Number(windSlider.value);
+    windTarget = i === 0 ? null : windSteps[i];
+    if (windSlideFrame) return; // redraw at most once per frame while dragging
+    windSlideFrame = requestAnimationFrame(() => {
+      windSlideFrame = null;
+      buildWindField(); redrawWind(); updateWindWhen();
+      if (lastWindPoint) showWindAt(lastWindPoint);
+    });
+  });
+  windNowBtn.addEventListener("click", () => {
+    windTarget = null;
+    buildWindField(); redrawWind(); syncWindSlider();
+    if (lastWindPoint) showWindAt(lastWindPoint);
+  });
+  let lastWindPoint = null;
+
   function updateWindMeta() {
+    syncWindSlider();
     if (windError) {
       windMeta.innerHTML = `<span class="wind-err">${esc(windError)}</span>`;
     } else if (windFetching && !windField) {
       windMeta.textContent = "Loading forecast…";
     } else if (windField) {
-      const t = new Date(windField.time * 1000).toLocaleString("en-NZ", {
-        timeZone: "Pacific/Auckland", weekday: "short", hour: "numeric", minute: "2-digit",
-      });
       const pending = !windGridFits(windData);
-      windMeta.textContent = `${WIND_LEVELS[windLevel].detail} · forecast for ${t} NZ time · knots` +
+      windMeta.textContent = `${WIND_LEVELS[windLevel].detail} · knots · Open-Meteo forecast` +
         (pending ? " · loading this area shortly…" : "");
     } else {
       windMeta.textContent = "";
@@ -1541,6 +1604,7 @@
 
   function showWindAt(latlng) {
     if (windLevel === "off") return;
+    lastWindPoint = latlng;
     const w = windAt(latlng.lat, latlng.lng < 0 ? latlng.lng + 360 : latlng.lng);
     if (!w) { windHere.textContent = "No wind data here"; return; }
     const spd = Math.hypot(w.u, w.v);
