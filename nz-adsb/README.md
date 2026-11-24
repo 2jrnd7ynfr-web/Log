@@ -10,6 +10,21 @@ and a link to it on globe.adsb.fi. Emergency squawks (7500/7600/7700) are flagge
 sorted to the top. Positions are dead-reckoned between updates so movement looks smooth.
 Works on phones, and has light and dark themes.
 
+## Basemap (MapTiler)
+
+With a MapTiler key the map uses MapTiler's muted **Dataviz** styles (light, and a
+proper dark style for dark mode). Without one it falls back to OpenStreetMap's tiles,
+which need no key but are only meant for light use and have no dark style (dark mode
+inverts them).
+
+1. Create a free account at [maptiler.com](https://www.maptiler.com/) and copy your API key.
+2. In MapTiler's dashboard, restrict the key to your site's address (the key appears in
+   every tile request, so this is what stops others reusing it).
+3. On Render, add `MAPTILER_KEY` under the service's **Environment** tab.
+
+The page checks the key with one test tile before switching, so a wrong, restricted or
+over-quota key leaves the map on OpenStreetMap rather than showing error tiles.
+
 ## Hover card (desktop)
 
 On a computer, point at any aircraft for a compact card with the flight number as

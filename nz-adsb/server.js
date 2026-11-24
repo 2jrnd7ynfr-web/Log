@@ -474,6 +474,13 @@ const PAGE = path.join(__dirname, "index.html");
 http
   .createServer((req, res) => {
     const url = new URL(req.url, "http://x");
+    if (url.pathname === "/api/config") {
+      // MapTiler keys are used in the browser (they're in every tile URL), so this is
+      // not a secret; it's kept in the MAPTILER_KEY environment variable rather than
+      // the repo, and should be restricted to the site's address in MapTiler's dashboard.
+      res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-cache" });
+      return res.end(JSON.stringify({ maptilerKey: (process.env.MAPTILER_KEY || "").trim() || null }));
+    }
     if (url.pathname === "/healthz") {
       // For hosting health checks: deliberately doesn't wake the adsb.fi poller
       res.writeHead(200, { "Content-Type": "text/plain", "Cache-Control": "no-store" });

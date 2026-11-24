@@ -345,13 +345,14 @@
   }
   .ac-label::before { display: none; }
   .leaflet-container { font-family: var(--sans); }
-  /* Mute the OSM colours so aircraft stand out; invert them for dark mode */
-  .leaflet-tile-pane { filter: saturate(0.45) contrast(0.92) brightness(1.04); }
-  :root[data-theme="dark"] .leaflet-tile-pane {
+  /* Fallback OpenStreetMap tiles: mute the colours so aircraft stand out, and invert
+     them for dark mode (OSM has no dark style). MapTiler's own styles need neither. */
+  .basemap-osm .leaflet-tile-pane { filter: saturate(0.45) contrast(0.92) brightness(1.04); }
+  :root[data-theme="dark"] .basemap-osm .leaflet-tile-pane {
     filter: invert(1) hue-rotate(180deg) saturate(0.35) brightness(0.85) contrast(0.9);
   }
   @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) .leaflet-tile-pane {
+    :root:not([data-theme="light"]) .basemap-osm .leaflet-tile-pane {
       filter: invert(1) hue-rotate(180deg) saturate(0.35) brightness(0.85) contrast(0.9);
     }
   }
@@ -481,13 +482,39 @@
     preferCanvas: false,
   }).fitBounds(NZ_BOUNDS);
 
-  // OpenStreetMap's standard tiles need no API key. They have no dark style, so
-  // dark mode darkens them with a CSS filter (see .leaflet-tile-pane).
-  const tiles = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    maxZoom: 19,
-    attribution:
-      '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors · Data <a href="https://adsb.fi">adsb.fi</a>',
-  }).addTo(map);
+  // Basemap: MapTiler's muted "Dataviz" styles (light and dark) when the server has a
+  // MapTiler key (MAPTILER_KEY on Render); otherwise OpenStreetMap's standard tiles,
+  // which need no key but are only meant for light use and have no dark style.
+  const DATA_ATTRIB = 'Data <a href="https://adsb.fi">adsb.fi</a>';
+  const OSM_ATTRIB = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors · ' + DATA_ATTRIB;
+  const MT_ATTRIB = '<a href="https://www.maptiler.com/copyright/" target="_blank" rel="noopener">&copy; MapTiler</a> ' +
+    '<a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">&copy; OpenStreetMap contributors</a> · ' + DATA_ATTRIB;
+  const MT_STYLES = { light: "dataviz", dark: "dataviz-dark" };
+  let maptilerKey = null;
+  const basemapUrl = () => maptilerKey
+    ? `https://api.maptiler.com/maps/${isDark() ? MT_STYLES.dark : MT_STYLES.light}/256/{z}/{x}/{y}{r}.png?key=${encodeURIComponent(maptilerKey)}`
+    : "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+  const tiles = L.tileLayer(basemapUrl(), { maxZoom: 19, attribution: OSM_ATTRIB }).addTo(map);
+  map.getContainer().classList.add("basemap-osm");
+  function useBasemap(key) {
+    maptilerKey = key;
+    map.getContainer().classList.toggle("basemap-osm", !key);
+    map.attributionControl.removeAttribution(key ? OSM_ATTRIB : MT_ATTRIB);
+    map.attributionControl.addAttribution(key ? MT_ATTRIB : OSM_ATTRIB);
+    tiles.setUrl(basemapUrl());
+  }
+  // Switch to MapTiler only after one test tile loads. A bad, expired or over-quota key
+  // (or one restricted to other websites) still returns an image, so a plain tile layer
+  // can't tell; checking the status first keeps the map on OpenStreetMap instead.
+  fetch("api/config", { cache: "no-store" })
+    .then((r) => (r.ok ? r.json() : {}))
+    .then(async (cfg) => {
+      if (!cfg.maptilerKey) return;
+      const test = await fetch(`https://api.maptiler.com/maps/${MT_STYLES.light}/256/5/31/19.png?key=${encodeURIComponent(cfg.maptilerKey)}`);
+      if (test.ok) useBasemap(cfg.maptilerKey);
+      else console.warn(`MapTiler key rejected (HTTP ${test.status}); using OpenStreetMap tiles`);
+    })
+    .catch((e) => console.warn("MapTiler unavailable; using OpenStreetMap tiles", e));
 
   const trailLayer = L.layerGroup().addTo(map);
   const planeLayer = L.layerGroup().addTo(map);
@@ -1091,6 +1118,7 @@
   };
 
   function applyTheme() {
+    tiles.setUrl(basemapUrl()); // MapTiler has separate light and dark styles
     for (const ac of aircraft.values()) ac.iconKey = ""; // force icon recolour
     paintLegend();
     redrawWind();
