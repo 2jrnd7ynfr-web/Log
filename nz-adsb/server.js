@@ -332,10 +332,16 @@ async function lookupRoute(callsign) {
   return { callsign, airports: airports.filter(Boolean) };
 }
 
+// Be a good neighbour to the free service: cap new (uncached) lookups per minute
+const HEXDB_MAX_PER_MIN = 60;
+let hexdbWindowStart = 0, hexdbWindowCount = 0;
+
 async function getHexdbRoute(callsign) {
   const hit = routeCache.get(callsign);
   if (hit && Date.now() - hit.at < hit.ttl) return hit.value;
   if (inflight.has(callsign)) return inflight.get(callsign);
+  if (Date.now() - hexdbWindowStart > 60000) { hexdbWindowStart = Date.now(); hexdbWindowCount = 0; }
+  if (++hexdbWindowCount > HEXDB_MAX_PER_MIN) throw new Error("busy: route lookup limit reached");
   const p = lookupRoute(callsign)
     .then((value) => {
       routeCache.set(callsign, { at: Date.now(), value, ttl: value.airports.length >= 2 ? ROUTE_TTL_MS : ROUTE_MISS_TTL_MS });
@@ -371,8 +377,10 @@ function adsbimFresh(cs) {
   const hit = adsbimCache.get(cs);
   return hit && Date.now() - hit.at < hit.ttl ? hit : null;
 }
+const ADSBIM_MAX_QUEUE = 300; // anyone can ask /api/route, so don't let the queue grow without bound
 function queueAdsbim(cs, lat, lng) {
   if (!ROUTE_CONTACT || adsbimFresh(cs)) return false;
+  if (!adsbimQueue.has(cs) && adsbimQueue.size >= ADSBIM_MAX_QUEUE) return false;
   adsbimQueue.set(cs, { lat: +(+lat || 0).toFixed(4), lng: toApiLon(+lng || 0) });
   return true;
 }

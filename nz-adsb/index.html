@@ -964,6 +964,8 @@
   }
   map.on("move", positionHoverCard);
   map.on("zoomstart", () => hideHoverCard(true));
+  // Route data is shown on this device, so credit its sources (adsb.im's is ODbL)
+  if (canHover) map.attributionControl.addAttribution('Routes <a href="https://adsb.im/">adsb.im</a> (ODbL), <a href="https://hexdb.io/">hexdb.io</a>');
 
   // ---------- List ----------
   const listEl = document.getElementById("list");
